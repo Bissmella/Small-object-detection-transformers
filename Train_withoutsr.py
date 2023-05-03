@@ -5711,7 +5711,6 @@ class Detect(nn.Module):
 
     def forward(self, x):
         # x = x.copy()  # for profiling
-        breakpoint()
         z = []  # inference output
         self.training |= self.export
         for i in range(self.nl):
@@ -5727,7 +5726,7 @@ class Detect(nn.Module):
                 y[..., 0:2] = (y[..., 0:2] * 2. - 0.5 + self.grid[i]) * self.stride[i]  # xy
                 y[..., 2:4] = (y[..., 2:4] * 2) ** 2 * self.anchor_grid[i]  # wh
                 z.append(y.view(bs, -1, self.no))
-        breakpoint()
+
         return x if self.training else (torch.cat(z, 1), x)
 
     @staticmethod
@@ -6582,25 +6581,6 @@ def train(hyp, opt, device, tb_writer=None):
         logger.info('Transferred %g/%g items from %s' % (len(state_dict), len(model.state_dict()), weights))  # report
     else:
         model = Model(opt.cfg, input_mode = opt.input_mode ,ch_steam=opt.ch_steam,ch=opt.ch, nc=nc, anchors=hyp.get('anchors'),config=None,sr=opt.super,factor=down_factor).to(device)  # create
-    
-    model.eval()
-    device = select_device(opt.device, batch_size=1)
-    img =  Image.open('/home/bbahaduri/sryolo/sryolo_data/VEDAIdataset/VEDAI_1024/images/00000000_co.png')
-    ir = Image.open('/home/bbahaduri/sryolo/sryolo_data/VEDAIdataset/VEDAI_1024/images/00000000_ir.png')
-    trans = torchvision.transforms.ToTensor()
-    img = trans(img)
-    ir = trans(ir)
-    img /= 255.0
-    ir /=255.0
-    img = img.unsqueeze(0)
-    ir = ir.unsqueeze(0)
-    img.to(device)
-    ir.to(device)
-    breakpoint()
-    with torch.no_grad():
-            # Run model
-        out, train_out, _ = model(img,ir,input_mode="RGB+IR+MF")
-    breakpoint()
     with torch_distributed_zero_first(rank):
         check_dataset(data_dict)  # check
     train_path = data_dict['train']
@@ -7100,7 +7080,7 @@ if __name__ == '__main__':
     parser.add_argument('--bucket', type=str, default='', help='gsutil bucket')
     parser.add_argument('--cache-images', action='store_true', help='cache images for faster training')
     parser.add_argument('--image-weights', action='store_true', help='use weighted image selection for training')
-    parser.add_argument('--device', default='cpu', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
+    parser.add_argument('--device', default='0', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
     parser.add_argument('--multi-scale', action='store_true', help='vary img-size +/- 50%%')
     parser.add_argument('--single-cls', action='store_true', help='train multi-class data as single-class')
     parser.add_argument('--adam', action='store_true', help='use torch.optim.Adam() optimizer')
@@ -7134,7 +7114,7 @@ if __name__ == '__main__':
     # Resume
     wandb_run = check_wandb_resume(opt)
     if opt.resume and not wandb_run:  # resume an interrupted run
-        ckpt = opt.resume if isinstance(opt.resume, str) else get_latest_run('/home/bbahaduri/sryolo/outputs/withoutSR/train/exp/')  # specified or most recent path
+        ckpt = opt.resume if isinstance(opt.resume, str) else get_latest_run()  # specified or most recent path
         assert os.path.isfile(ckpt), 'ERROR: --resume checkpoint does not exist'
         apriori = opt.global_rank, opt.local_rank
         with open(Path(ckpt).parent.parent / 'opt.yaml') as f:
@@ -7151,7 +7131,6 @@ if __name__ == '__main__':
 
     # DDP mode
     opt.total_batch_size = opt.batch_size
-    opt.device = 'cpu'
     device = select_device(opt.device, batch_size=opt.batch_size)
     #*device = torch.device('cuda:0')    #*   cuda:0 or cpu     manual device config added 
     if opt.local_rank != -1:
