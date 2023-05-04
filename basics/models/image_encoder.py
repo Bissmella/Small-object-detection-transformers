@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from typing import Optional, Tuple, Type
-
+from functools import partial
 from .SAM_commons import MLPBlock, LayerNorm2d
 
 class ImageEncoderViT(nn.Module):
@@ -18,10 +18,10 @@ class ImageEncoderViT(nn.Module):
         mlp_ratio: float = 4.0,
         out_chans: int = 256,
         qkv_bias: bool = True,
-        norm_layer: Type[nn.Module] = nn.LayerNorm,
+        norm_layer: Type[nn.Module] = partial(torch.nn.LayerNorm, eps=1e-6), # nn.LayerNorm,
         act_layer: Type[nn.Module] = nn.GELU,
         use_abs_pos: bool = True,
-        use_rel_pos: bool = False,
+        use_rel_pos: bool = True,        #False,
         rel_pos_zero_init: bool = True,
         window_size: int = 0,
         global_attn_indexes: Tuple[int, ...] = (2, 5, 8, 11), #*changed

@@ -227,7 +227,6 @@ class Model(nn.Module):
                          _ = m(x)
                      dt.append((time_synchronized() - t) * 100)
                      print('%10.1f%10.0f%10.1fms %-40s' % (o, m.np, dt[-1], m.type))
-
             x = self.image_encoder(x)
             y.append(x)
             '''
@@ -404,7 +403,7 @@ def parse_model(d, string, ch,config):  # model_dict, input_channels(3)
             c2 = ch[f if f < 0 else f + 1]
 
         if string == 'backbone':
-            m_ = m()
+            m_ = m(img_size = args[0], patch_size=args[1], in_chans= args[2], out_chans=args[3], window_size= args[4])
         else:
             m_ = nn.Sequential(*[m(*args) for _ in range(n)]) if n > 1 else m(*args)  # module
         t = str(m)[8:-2].replace('__main__.', '')  # module type

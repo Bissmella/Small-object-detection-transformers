@@ -5866,6 +5866,7 @@ class Model(nn.Module):
     
     def forward_once(self, x, string, profile=False):
         y, dt = [], []  # outputs
+        breakpoint()
         if string == 'steam':
             for m in self.steam:
                 if m.f != -1:  # if not from previous layer
@@ -5894,7 +5895,9 @@ class Model(nn.Module):
                         _ = m(x)
                     dt.append((time_synchronized() - t) * 100)
                     print('%10.1f%10.0f%10.1fms %-40s' % (o, m.np, dt[-1], m.type))
+                breakpoint()
                 x = m(x)  # run
+                breakpoint()
                 y.append(x)
                 
 
@@ -6583,24 +6586,6 @@ def train(hyp, opt, device, tb_writer=None):
     else:
         model = Model(opt.cfg, input_mode = opt.input_mode ,ch_steam=opt.ch_steam,ch=opt.ch, nc=nc, anchors=hyp.get('anchors'),config=None,sr=opt.super,factor=down_factor).to(device)  # create
     
-    model.eval()
-    device = select_device(opt.device, batch_size=1)
-    img =  Image.open('/home/bbahaduri/sryolo/sryolo_data/VEDAIdataset/VEDAI_1024/images/00000000_co.png')
-    ir = Image.open('/home/bbahaduri/sryolo/sryolo_data/VEDAIdataset/VEDAI_1024/images/00000000_ir.png')
-    trans = torchvision.transforms.ToTensor()
-    img = trans(img)
-    ir = trans(ir)
-    img /= 255.0
-    ir /=255.0
-    img = img.unsqueeze(0)
-    ir = ir.unsqueeze(0)
-    img.to(device)
-    ir.to(device)
-    breakpoint()
-    with torch.no_grad():
-            # Run model
-        out, train_out, _ = model(img,ir,input_mode="RGB+IR+MF")
-    breakpoint()
     with torch_distributed_zero_first(rank):
         check_dataset(data_dict)  # check
     train_path = data_dict['train']
@@ -7083,16 +7068,16 @@ if __name__ == '__main__':
     parser.add_argument('--super', default=False, action='store_true', help='super resolution')
     parser.add_argument('--data', type=str,default='models/SRvedai.yaml', help='data.yaml path')
     parser.add_argument('--hyp', type=str, default='models/hyp.scratch.yaml', help='hyperparameters path')
-    parser.add_argument('--epochs', type=int, default=300) 
+    parser.add_argument('--epochs', type=int, default=200)    #300
     parser.add_argument('--ch_steam', type=int, default=3)
     parser.add_argument('--ch', type=int,default=64, help = '3 4 16 midfusion1:64 midfusion2,3:128 midfusion4:256') 
     parser.add_argument('--input_mode', type=str,default='RGB+IR+MF',help ='RGB IR RGB+IR(pixel-level fusion) RGB+IR+fusion(feature-level fusion)')
-    parser.add_argument('--batch-size', type=int, default=10, help='total batch size for all GPUs')    #* default 2
+    parser.add_argument('--batch-size', type=int, default=1, help='total batch size for all GPUs')    #* default 2   last 10
     parser.add_argument('--train_img_size', type=int,default=1024, help='train image sizes,if use SR,please set 1024')
     parser.add_argument('--test_img_size', type=int, default=512, help='test image sizes')
     parser.add_argument('--hr_input', default=True,action='store_true', help='high resolution input(1024*1024)') #if use SR,please set True
     parser.add_argument('--rect', action='store_true', help='rectangular training')
-    parser.add_argument('--resume', nargs='?', const=True, default=True, help='resume most recent training')
+    parser.add_argument('--resume', nargs='?', const=True, default=False, help='resume most recent training')
     parser.add_argument('--nosave', action='store_true', help='only save final checkpoint')
     parser.add_argument('--notest', action='store_true', help='only test final epoch')
     parser.add_argument('--noautoanchor', action='store_true', help='disable autoanchor check')
@@ -7107,7 +7092,7 @@ if __name__ == '__main__':
     parser.add_argument('--sync-bn', action='store_true', help='use SyncBatchNorm, only available in DDP mode')
     parser.add_argument('--local_rank', type=int, default=-1, help='DDP parameter, do not modify')
     parser.add_argument('--workers', type=int, default=4, help='maximum number of dataloader workers')
-    parser.add_argument('--project', default='run/train', help='save to project/name')
+    parser.add_argument('--project', default='outputs/withoutSR/train', help='save to project/name')
     parser.add_argument('--entity', default=None, help='W&B entity')
     parser.add_argument('--name', default='exp', help='save to project/name')
     parser.add_argument('--exist-ok', action='store_true', help='existing project/name ok, do not increment')
