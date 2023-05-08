@@ -16,7 +16,7 @@ from .utils.general import coco80_to_coco91_class, check_dataset, check_file, ch
 from .utils.metrics import ap_per_class, ConfusionMatrix
 from .utils.plots import plot_images, output_to_target, plot_study_txt
 from .utils.torch_utils import select_device, time_synchronized
-
+import torch.nn.functional as F
 from torchvision import transforms
 from PIL import Image
 unloader = transforms.ToPILImage()
@@ -129,6 +129,8 @@ def test(data,
         ir /= 255.0  # 0 - 255 to 0.0 - 1.0
         targets = targets.to(device)
         nb, _, height, width = img.shape  # batch size, channels, height, width
+        img=F.interpolate(img,size=[i//2 for i in img.size()[2:]], mode='bilinear', align_corners=True)
+        img=F.interpolate(img,size=[i*2 for i in img.size()[2:]], mode='bilinear', align_corners=True)
 
         with torch.no_grad():
             # Run model
