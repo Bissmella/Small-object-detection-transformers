@@ -1,11 +1,9 @@
 # -*- coding: utf-8 -*-
-#SuperYolo with SAM image encoder backbone
-#used for training SRyolo with SAM backbone frozen weights RGB mode SAM's original config (stride 16)
+#SuperYolo with resnet  backbone
+#used for training SRyolo with resnet50 backbone RGB mode 
 
 
-#@title SAM_Image_Encoder
-from basics.models.image_encoder import ImageEncoderViT, PatchEmbed, Block, Attention
-from basics.models.SAM_commons import MLPBlock, LayerNorm2d
+
 
 
 import argparse
@@ -33,7 +31,7 @@ from tqdm import tqdm
 # import test_up  # import test.py to get mAP after each epoch
 from basics.test import test
 from basics.models.experimental import attempt_load
-from basics.models.SRyolo import Model #zjq
+from basics.models.SRyolo_resnetbb import Model #zjq
 from basics.utils.autoanchor import check_anchors
 
 
@@ -108,18 +106,7 @@ def train(hyp, opt, device, tb_writer=None):
         logger.info('Transferred %g/%g items from %s' % (len(state_dict), len(model.state_dict()), weights))  # report
     else:
         model = Model(opt.cfg, input_mode = opt.input_mode ,ch_steam=opt.ch_steam,ch=opt.ch, nc=nc, anchors=hyp.get('anchors'),config=None,sr=opt.super,factor=down_factor).to(device)  # create
-        SAM_weights = torch.load("/home/bbahaduri/sryolo/weights/sam_vit_b_01ec64.pth")
-        vit_bb = {}
-        for key in SAM_weights.keys():
-            if key.startswith("image_encoder"):     #* and not key.startswith("image_encoder.patch_embed") and not key.startswith("image_encoder.pos_embed"): 
-                print(key)
-                vit_bb[key] = SAM_weights[key]
-        model.load_state_dict(vit_bb, strict=False)
-        print("related weights loaded from SAM")
-    for name, param in model.named_parameters():
-         if name.startswith("image_encoder"):   #* and not name.startswith("image_encoder.patch_embed") and not name.startswith("image_encoder.pos_embed"):
-             param.requires_grad = False
-             print(name, param.requires_grad)
+
  
     with torch_distributed_zero_first(rank):
         check_dataset(data_dict)  # check
@@ -246,7 +233,7 @@ def train(hyp, opt, device, tb_writer=None):
     # Process 0
     if rank in [-1, 0]:
         # if not opt.data.endswith('SRvedai.yaml'):
-        testloader = create_dataloader(test_path, imgsz, 8, gs, opt,  # testloader     #*changed
+        testloader = create_dataloader(test_path, imgsz_test, batch_size, gs, opt,  # testloader     #*changed
                                     hyp=hyp, cache=opt.cache_images and not opt.notest, rect=False, rank=-1,
                                     #world_size=opt.world_size, 
                                     workers=opt.workers,pad=0.5,
@@ -297,7 +284,7 @@ def train(hyp, opt, device, tb_writer=None):
     compute_loss = ComputeLoss(model)  # init loss class
     # attention_loss = LevelAttention_loss()
     # superloss = Superresolution_loss()
-    logger.info(f'Image sizes {imgsz} train, {imgsz} test\n'
+    logger.info(f'Image sizes {imgsz} train, {imgsz_test} test\n'
                 f'Using {dataloader.num_workers} dataloader workers\n'
                 f'Logging results to {save_dir}\n'
                 f'Starting training for {epochs} epochs...')
@@ -604,15 +591,15 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     #############################
     parser.add_argument('--weights', type=str, default='', help='initial weights path')
-    parser.add_argument('--cfg', type=str,default='models/SRyolo_SAM_v3_orig.yaml', help='model.yaml path') #yolov5s
+    parser.add_argument('--cfg', type=str,default='codes/models/SRyolo_resnet50.yaml', help='model.yaml path') #yolov5s
     parser.add_argument('--super', default=False, action='store_true', help='super resolution')
-    parser.add_argument('--data', type=str,default='models/SRvedai.yaml', help='data.yaml path')
-    parser.add_argument('--hyp', type=str, default='models/hyp.scratch.yaml', help='hyperparameters path')
+    parser.add_argument('--data', type=str,default='codes/models/SRvedai.yaml', help='data.yaml path')
+    parser.add_argument('--hyp', type=str, default='codes/models/hyp.scratch.yaml', help='hyperparameters path')
     parser.add_argument('--epochs', type=int, default=200)          #*changed default 300
     parser.add_argument('--ch_steam', type=int, default=3)
     parser.add_argument('--ch', type=int,default=128, help = '3 4 16 midfusion1:64 midfusion2,3:128 midfusion4:256')  #*changed from default to match SAM
     parser.add_argument('--input_mode', type=str,default='RGB',help ='RGB IR RGB+IR(pixel-level fusion) RGB+IR+fusion(feature-level fusion)')
-    parser.add_argument('--batch-size', type=int, default=16, help='total batch size for all GPUs')    #* default 2
+    parser.add_argument('--batch-size', type=int, default=1, help='total batch size for all GPUs')    #* default 2
     parser.add_argument('--train_img_size', type=int,default=1024, help='train image sizes,if use SR,please set 1024')
     parser.add_argument('--test_img_size', type=int, default=512, help='test image sizes')
     parser.add_argument('--hr_input', default=True,action='store_true', help='high resolution input(1024*1024)') #if use SR,please set True
@@ -625,14 +612,14 @@ if __name__ == '__main__':
     parser.add_argument('--bucket', type=str, default='', help='gsutil bucket')
     parser.add_argument('--cache-images', action='store_true', default = False, help='cache images for faster training')  #* changed
     parser.add_argument('--image-weights', action='store_true', help='use weighted image selection for training')
-    parser.add_argument('--device', default='0', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
+    parser.add_argument('--device', default='cpu', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
     parser.add_argument('--multi-scale', action='store_true', help='vary img-size +/- 50%%')
     parser.add_argument('--single-cls', action='store_true', help='train multi-class data as single-class')
     parser.add_argument('--adam', action='store_true', help='use torch.optim.Adam() optimizer')
     parser.add_argument('--sync-bn', action='store_true', help='use SyncBatchNorm, only available in DDP mode')
     parser.add_argument('--local_rank', type=int, default=-1, help='DDP parameter, do not modify')
     parser.add_argument('--workers', type=int, default=4, help='maximum number of dataloader workers')
-    parser.add_argument('--project', default='outputs_SAM/yoloSAM_v2_s16_frozen_RGB/run/train', help='save to project/name')
+    parser.add_argument('--project', default='outputs/outputs_resnet50/run/train', help='save to project/name')
     parser.add_argument('--entity', default=None, help='W&B entity')
     parser.add_argument('--name', default='exp', help='save to project/name')
     parser.add_argument('--exist-ok', action='store_true', help='existing project/name ok, do not increment')
