@@ -224,7 +224,6 @@ class Model(nn.Module):
                 #y.append(x if m.i in self.save_steam else None)  # save output
             return x
         elif string == 'yolo':
-            breakpoint()
             m = self.backbone
             if profile:
                      o = thop.profile(m, inputs=(x,), verbose=False)[0] / 1E9 * 2 if thop else 0  # FLOPS
