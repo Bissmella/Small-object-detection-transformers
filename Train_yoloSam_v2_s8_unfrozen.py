@@ -277,7 +277,7 @@ def train(hyp, opt, device, tb_writer=None):
 
     # DDP mode
     if cuda and rank != -1:
-        model = DDP(model, device_ids=[opt.local_rank], output_device=opt.local_rank)
+        model = DDP(model, device_ids=[opt.local_rank], output_device=opt.local_rank, find_unused_parameters=True)
 
     # Model parameters
     hyp['box'] *= 3. / nl  # scale to layers
@@ -367,7 +367,7 @@ def train(hyp, opt, device, tb_writer=None):
         for i, (imgs, irs, targets, paths, _) in pbar:  # batch zjq  -------------------------------------------------------------
             ni = i + nb * epoch  # number integrated batches (since train start)
             image = imgs.to(device, non_blocking=True).float() / 255.0  # uint8 to float32, 0-255 to 0.0-1.0
-            ir_image = irs.to(device, non_blocking=True).float() / 255.0 #zjq
+            ir_image = None #*irs.to(device, non_blocking=True).float() / 255.0 #zjq
 
             # if imgsz==imgsz_test*2:
             #     imgs=F.interpolate(image,size=[i//2 for i in image.size()[2:]], mode='bilinear', align_corners=True)
@@ -375,10 +375,10 @@ def train(hyp, opt, device, tb_writer=None):
             #down_factor = int(imgsz/imgsz_test)
             if down_factor>1:
                 imgs=F.interpolate(image,size=[i//down_factor for i in image.size()[2:]], mode='bilinear', align_corners=True)
-                irs=F.interpolate(ir_image,size=[i//down_factor for i in ir_image.size()[2:]], mode='bilinear', align_corners=True)
+                irs=None#*F.interpolate(ir_image,size=[i//down_factor for i in ir_image.size()[2:]], mode='bilinear', align_corners=True)
             else:
                 imgs = image
-                irs = ir_image
+                irs = None #* for efficiency ir_image
             # imgs = get_edge(imgs).to(device, non_blocking=True)
             # irs = get_edge(irs).to(device, non_blocking=True)
             # Warmup
@@ -602,28 +602,28 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     #############################
     parser.add_argument('--weights', type=str, default='', help='initial weights path')
-    parser.add_argument('--cfg', type=str,default='models/SRyolo_SAM_v2.yaml', help='model.yaml path') #yolov5s
+    parser.add_argument('--cfg', type=str,default='codes/models/SRyolo_SAM_v2.yaml', help='model.yaml path') #yolov5s
     parser.add_argument('--super', default=False, action='store_true', help='super resolution')
-    parser.add_argument('--data', type=str,default='models/SRvedai.yaml', help='data.yaml path')
-    parser.add_argument('--hyp', type=str, default='models/hyp.scratch.yaml', help='hyperparameters path')
+    parser.add_argument('--data', type=str,default='codes/models/SRvedai.yaml', help='data.yaml path')
+    parser.add_argument('--hyp', type=str, default='codes/models/hyp.scratch.yaml', help='hyperparameters path')
     parser.add_argument('--epochs', type=int, default=200)          #*changed default 300
     parser.add_argument('--ch_steam', type=int, default=3)
     parser.add_argument('--ch', type=int,default=128, help = '3 4 16 midfusion1:64 midfusion2,3:128 midfusion4:256')  #*changed from default to match SAM
     parser.add_argument('--input_mode', type=str,default='RGB',help ='RGB IR RGB+IR(pixel-level fusion) RGB+IR+fusion(feature-level fusion)')
-    parser.add_argument('--batch-size', type=int, default=16, help='total batch size for all GPUs')    #* default 2
+    parser.add_argument('--batch-size', type=int, default=4, help='total batch size for all GPUs')    #* default 2
     parser.add_argument('--train_img_size', type=int,default=1024, help='train image sizes,if use SR,please set 1024')
     parser.add_argument('--test_img_size', type=int, default=512, help='test image sizes')
     parser.add_argument('--hr_input', default=False,action='store_true', help='high resolution input(1024*1024)') #if use SR,please set True
     parser.add_argument('--rect', action='store_true', help='rectangular training')
-    parser.add_argument('--resume', nargs='?', const=True, default=False, help='resume most recent training')
+    parser.add_argument('--resume', nargs='?', const=True, default=True, help='resume most recent training')
     parser.add_argument('--nosave', action='store_true', help='only save final checkpoint')
     parser.add_argument('--notest', action='store_true', help='only test final epoch')
     parser.add_argument('--noautoanchor', action='store_true', help='disable autoanchor check')
     parser.add_argument('--evolve', action='store_true', help='evolve hyperparameters')
     parser.add_argument('--bucket', type=str, default='', help='gsutil bucket')
-    parser.add_argument('--cache-images', action='store_true', default = False, help='cache images for faster training')  #* changed
+    parser.add_argument('--cache-images', action='store_true', default = True, help='cache images for faster training')  #* changed
     parser.add_argument('--image-weights', action='store_true', help='use weighted image selection for training')
-    parser.add_argument('--device', default='0', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
+    parser.add_argument('--device', default='0,1', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
     parser.add_argument('--multi-scale', action='store_true', help='vary img-size +/- 50%%')
     parser.add_argument('--single-cls', action='store_true', help='train multi-class data as single-class')
     parser.add_argument('--adam', action='store_true', help='use torch.optim.Adam() optimizer')
@@ -647,8 +647,8 @@ if __name__ == '__main__':
     #config = get_config(args)
 
     # Set DDP variables
-    opt.world_size = int(os.environ['WORLD_SIZE']) if 'WORLD_SIZE' in os.environ else 1
-    opt.global_rank = int(os.environ['RANK']) if 'RANK' in os.environ else -1
+    opt.world_size = 2 #*int(os.environ['WORLD_SIZE']) if 'WORLD_SIZE' in os.environ else 1
+    opt.global_rank = opt.local_rank #* changed for multi gpu from->int(os.environ['RANK']) if 'RANK' in os.environ else -1
     set_logging(opt.global_rank)
     if opt.global_rank in [-1, 0]:
         check_git_status()
@@ -657,7 +657,7 @@ if __name__ == '__main__':
     # Resume
     wandb_run = check_wandb_resume(opt)
     if opt.resume and not wandb_run:  # resume an interrupted run
-        ckpt = opt.resume if isinstance(opt.resume, str) else get_latest_run()  # specified or most recent path
+        ckpt = opt.resume if isinstance(opt.resume, str) else get_latest_run('/home/bbahaduri/sryolo/outputs/yoloSAM_s8_RGB/run/train/exp26')  # specified or most recent path
         assert os.path.isfile(ckpt), 'ERROR: --resume checkpoint does not exist'
         apriori = opt.global_rank, opt.local_rank
         with open(Path(ckpt).parent.parent / 'opt.yaml') as f:
@@ -674,13 +674,16 @@ if __name__ == '__main__':
 
     # DDP mode
     opt.total_batch_size = opt.batch_size
-    device = select_device(opt.device, batch_size=opt.batch_size)
+    #device = select_device(opt.device, batch_size=opt.batch_size)
     #device = torch.device('cuda:0')
     if opt.local_rank != -1:
+        breakpoint()
         assert torch.cuda.device_count() > opt.local_rank
         torch.cuda.set_device(opt.local_rank)
         device = torch.device('cuda', opt.local_rank)
-        dist.init_process_group(backend='nccl', init_method='env://')  # distributed backend
+        os.environ["MASTER_ADDR"] = "localhost"
+        os.environ["MASTER_PORT"] = "12358"
+        dist.init_process_group(backend='nccl', rank=opt.local_rank, world_size=2)  # distributed backend
         assert opt.batch_size % opt.world_size == 0, '--batch-size must be multiple of CUDA device count'
         opt.batch_size = opt.total_batch_size // opt.world_size
 
