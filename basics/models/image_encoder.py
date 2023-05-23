@@ -100,10 +100,8 @@ class ImageEncoderViT(nn.Module):
         if self.pos_embed is not None:
             if x.shape[1] == self.pos_embed.shape[1]:
                 x = x + self.pos_embed
-
         for blk in self.blocks:
             x = blk(x)
-
         x = self.neck(x.permute(0, 3, 1, 2))
         return x
 

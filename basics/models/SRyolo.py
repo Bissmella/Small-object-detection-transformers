@@ -48,6 +48,7 @@ class Detect(nn.Module):
     def forward(self, x):
         # x = x.copy()  # for profiling
         z = []  # inference output
+        breakpoint()
         self.training |= self.export
         for i in range(self.nl):
             x[i] = self.m[i](x[i])  # conv
@@ -390,7 +391,7 @@ def parse_model(d, string, ch,config):  # model_dict, input_channels(3)
         elif m is Concat:# or m is SAM:
             c2 = sum([ch[x if x < 0 else x + 1] for x in f])
         elif m is Detect:
-            args.append([ch[x] for x in f])   #*changed removed + 1
+            args.append([ch[x + 1] for x in f])   #*changed removed + 1
             if isinstance(args[1], int):  # number of anchors
                 args[1] = [list(range(args[1] * 2))] * len(f)
             print(*args)

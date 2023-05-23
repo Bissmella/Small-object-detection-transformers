@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from models.sync_batchnorm.batchnorm import SynchronizedBatchNorm2d
+from .sync_batchnorm.batchnorm import SynchronizedBatchNorm2d
 #from models.common import AttentionModel
 class Decoder(nn.Module):
     def __init__(self, c1,c2):

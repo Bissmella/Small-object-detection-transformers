@@ -224,7 +224,6 @@ class Model(nn.Module):
                 #y.append(x if m.i in self.save_steam else None)  # save output
             return x
         elif string == 'yolo':
-            breakpoint()
             m = self.backbone
             if profile:
                      o = thop.profile(m, inputs=(x,), verbose=False)[0] / 1E9 * 2 if thop else 0  # FLOPS
@@ -238,10 +237,11 @@ class Model(nn.Module):
             x = self.backbone.relu(x)
             x = self.backbone.maxpool(x)
             x = self.backbone.layer1(x)
+            y.append(x)
             x = self.backbone.layer2(x)
             #x2 = self.converterl2(x)
             #breakpoint()
-            y.append(x)
+            #y.append(x)
             x = self.backbone.layer3(x)
             xl3 = self.converterl3(x)
             y.append(xl3)
@@ -369,7 +369,7 @@ def parse_model(d, string, ch,config):  # model_dict, input_channels(3)
     else:
         d_ = d[stri[-1]]
     if string == 'head':
-        ch.append(512)
+        ch.append(256)
         ch.append(256)
     for i, (f, n, m, args) in enumerate(d_):  # from, number, module, args
         m = eval(m) if isinstance(m, str) else m  # eval strings

@@ -90,7 +90,7 @@ def test(data,
     # Configure
     model.eval()
 
-    print(model)
+    #print(model)
     if isinstance(data, str):
         is_coco = data.endswith('coco.yaml')
         with open(data) as f:
@@ -129,8 +129,8 @@ def test(data,
         ir /= 255.0  # 0 - 255 to 0.0 - 1.0
         targets = targets.to(device)
         nb, _, height, width = img.shape  # batch size, channels, height, width
-        img=F.interpolate(img,size=[i//2 for i in img.size()[2:]], mode='bilinear', align_corners=True)  #* added for SAM backbone
-        img=F.interpolate(img,size=[i*2 for i in img.size()[2:]], mode='bilinear', align_corners=True)  #* added for SAM backbone
+        #img=F.interpolate(img,size=[i//2 for i in img.size()[2:]], mode='bilinear', align_corners=True)  #* added for SAM backbone
+        #img=F.interpolate(img,size=[i*2 for i in img.size()[2:]], mode='bilinear', align_corners=True)  #* added for SAM backbone
 
         with torch.no_grad():
             # Run model

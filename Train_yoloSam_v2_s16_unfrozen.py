@@ -633,7 +633,7 @@ if __name__ == '__main__':
     parser.add_argument('--test_img_size', type=int, default=512, help='test image sizes')
     parser.add_argument('--hr_input', default=True,action='store_true', help='high resolution input(1024*1024)') #if use SR,please set True
     parser.add_argument('--rect', action='store_true', help='rectangular training')
-    parser.add_argument('--resume', nargs='?', const=True, default=False, help='resume most recent training')
+    parser.add_argument('--resume', nargs='?', const=True, default=True, help='resume most recent training')
     parser.add_argument('--nosave', action='store_true', help='only save final checkpoint')
     parser.add_argument('--notest', action='store_true', help='only test final epoch')
     parser.add_argument('--noautoanchor', action='store_true', help='disable autoanchor check')

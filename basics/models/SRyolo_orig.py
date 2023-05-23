@@ -98,7 +98,7 @@ class Model(nn.Module):
         self.detect, self.save2 = parse_model(deepcopy(self.yaml),'head', ch=[ch],config=config)                #*changed added to match SAM
         if self.sr == True:
             # from models.deeplab import DeepLab
-            from models.deeplabedsr import DeepLab
+            from .deeplabedsr import DeepLab
             if input_mode == 'IR' or input_mode == 'RGB':
                 self.model_up = DeepLab(3,self.yaml['c1'],self.yaml['c2'],factor=factor)#.cuda() #'if the size is m:192,768 l:256,1024 x:320 1280
             else:
