@@ -24,7 +24,7 @@ class ImageEncoderViT(nn.Module):
         use_rel_pos: bool = True,        #False,
         rel_pos_zero_init: bool = True,
         window_size: int = 0,
-        global_attn_indexes: Tuple[int, ...] = (2, 5, 8, 11), #*changed
+        global_attn_indexes: Tuple[int, ...] = (), #*changed
     ) -> None:
         """
         Args:
@@ -131,6 +131,7 @@ class ImageEncoderViT(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        breakpoint()
         x = self.patch_embed(x)
         y = []
         if self.pos_embed is not None:

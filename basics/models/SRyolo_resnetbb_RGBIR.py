@@ -6,14 +6,14 @@ import sys
 from copy import deepcopy
 import scipy.io as sio
 from torch import mode
-
+from torchvision.models import resnet50
 sys.path.append('./')  # to run '$ python *.py' files in subdirectories
 logger = logging.getLogger(__name__)
 
 from .common import *
 # from models.swin_transformer import *
 from .experimental import *
-from .image_encoder_mL import *
+from .image_encoder import *
 # from models.edsr import EDSR
 from ..utils.autoanchor import check_anchor_order
 from ..utils.general import make_divisible, check_file, set_logging
@@ -48,7 +48,6 @@ class Detect(nn.Module):
     def forward(self, x):
         # x = x.copy()  # for profiling
         z = []  # inference output
-        breakpoint()
         self.training |= self.export
         for i in range(self.nl):
             x[i] = self.m[i](x[i])  # conv
@@ -94,7 +93,14 @@ class Model(nn.Module):
         if input_mode == 'RGB+IR+fusion':
             self.steam, _ = parse_model(deepcopy(self.yaml),'steam', ch=[ch_steam],config=config)  # zjq model, savelist
         #self.model, self.save = parse_model(deepcopy(self.yaml),'backbone+head', ch=[ch],config=config)  # model, savelist   #* changed removed
-        self.image_encoder, self.save1 = parse_model(deepcopy(self.yaml),'backbone', ch=[ch],config=config)   #*changed added to match SAM
+        #self.image_encoder, self.save1 = parse_model(deepcopy(self.yaml),'backbone', ch=[ch],config=config)   #*changed added to match SAM
+        self.backbone = resnet50()
+        del self.backbone.fc
+        new_conv = torch.nn.Conv2d(4, 64, kernel_size=7, stride=2, padding=3, bias=False)
+        self.backbone.conv1 = new_conv
+        self.converter = nn.Conv2d(2048, 256, 1)
+        self.converterl3 = nn.Conv2d(1024, 256, 1)
+        self.converterl2 = nn.Conv2d(512, 256, 1)
         self.detect, self.save2 = parse_model(deepcopy(self.yaml),'head', ch=[ch],config=config)                #*changed added to match SAM
         if self.sr == True:
             # from models.deeplab import DeepLab
@@ -219,8 +225,8 @@ class Model(nn.Module):
                 x = m(x)  # run
                 #y.append(x if m.i in self.save_steam else None)  # save output
             return x
-        elif string == 'yolo': 
-            m = self.image_encoder
+        elif string == 'yolo':
+            m = self.backbone
             if profile:
                      o = thop.profile(m, inputs=(x,), verbose=False)[0] / 1E9 * 2 if thop else 0  # FLOPS
                      t = time_synchronized()
@@ -228,8 +234,22 @@ class Model(nn.Module):
                          _ = m(x)
                      dt.append((time_synchronized() - t) * 100)
                      print('%10.1f%10.0f%10.1fms %-40s' % (o, m.np, dt[-1], m.type))
-            x = self.image_encoder(x)
-            y.extend(x)
+            x = self.backbone.conv1(x)
+            x = self.backbone.bn1(x)
+            x = self.backbone.relu(x)
+            x = self.backbone.maxpool(x)
+            x = self.backbone.layer1(x)
+            y.append(x)
+            x = self.backbone.layer2(x)
+            #x2 = self.converterl2(x)
+            #breakpoint()
+            #y.append(x)
+            x = self.backbone.layer3(x)
+            xl3 = self.converterl3(x)
+            y.append(xl3)
+            x = self.backbone.layer4(x)
+            x = self.converter(x)
+            y.append(x)
             '''
             m = self.detect
             if profile:
@@ -353,7 +373,6 @@ def parse_model(d, string, ch,config):  # model_dict, input_channels(3)
     if string == 'head':
         ch.append(256)
         ch.append(256)
-        ch.append(256)
     for i, (f, n, m, args) in enumerate(d_):  # from, number, module, args
         m = eval(m) if isinstance(m, str) else m  # eval strings
         for j, a in enumerate(args):
@@ -393,7 +412,7 @@ def parse_model(d, string, ch,config):  # model_dict, input_channels(3)
         elif m is Concat:# or m is SAM:
             c2 = sum([ch[x if x < 0 else x + 1] for x in f])
         elif m is Detect:
-            args.append([ch[x + 1] for x in f])   #*changed removed + 1
+            args.append([ch[x] for x in f])   #*changed removed + 1
             if isinstance(args[1], int):  # number of anchors
                 args[1] = [list(range(args[1] * 2))] * len(f)
             print(*args)
@@ -406,7 +425,7 @@ def parse_model(d, string, ch,config):  # model_dict, input_channels(3)
             c2 = ch[f if f < 0 else f + 1]
 
         if string == 'backbone':
-            m_ = m(img_size = args[0], patch_size=6, embed_dim= args[2], in_chans= args[3], out_chans=args[4], window_size= args[5])
+            m_ = m(img_size = args[0], patch_size=args[1], in_chans= args[2], out_chans=args[3], window_size= args[4])
         else:
             m_ = nn.Sequential(*[m(*args) for _ in range(n)]) if n > 1 else m(*args)  # module
         t = str(m)[8:-2].replace('__main__.', '')  # module type

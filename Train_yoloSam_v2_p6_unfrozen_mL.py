@@ -109,7 +109,7 @@ def train(hyp, opt, device, tb_writer=None):
         logger.info('Transferred %g/%g items from %s' % (len(state_dict), len(model.state_dict()), weights))  # report
     else:
         model = Model(opt.cfg, input_mode = opt.input_mode ,ch_steam=opt.ch_steam,ch=opt.ch, nc=nc, anchors=hyp.get('anchors'),config=None,sr=opt.super,factor=down_factor).to(device)  # create
-        
+        '''
         #* loading SAM backbone weights
         SAM_weights = torch.load("/home/bbahaduri/sryolo/weights/sam_vit_b_01ec64.pth")
         vit_bb = {}
@@ -119,7 +119,7 @@ def train(hyp, opt, device, tb_writer=None):
                 vit_bb[key] = SAM_weights[key]
         model.load_state_dict(vit_bb, strict=False)
         print("related weights loaded from SAM")
-        '''
+        
         for name, param in model.named_parameters():
          if name.startswith("image_encoder"):   #* and not name.startswith("image_encoder.patch_embed") and not name.startswith("image_encoder.pos_embed"):
              param.requires_grad = False
@@ -391,7 +391,7 @@ def train(hyp, opt, device, tb_writer=None):
             if down_factor>1:
                 imgs=F.interpolate(image,size=[i//down_factor for i in image.size()[2:]], mode='bilinear', align_corners=True)
 
-                #irs=F.interpolate(ir_image,size=[i//down_factor for i in ir_image.size()[2:]], mode='bilinear', align_corners=True)
+                irs=F.interpolate(ir_image,size=[i//down_factor for i in ir_image.size()[2:]], mode='bilinear', align_corners=True)
                 #imgs=F.interpolate(imgs,size=[i*down_factor for i in imgs.size()[2:]], mode='bilinear', align_corners=True)  #*looks crazy but to make the result comparable with previous training and compatible with SAM backbone
 
             else:
@@ -420,7 +420,6 @@ def train(hyp, opt, device, tb_writer=None):
                     ns = [math.ceil(x * sf / gs) * gs for x in imgs.shape[2:]]  # new shape (stretched to gs-multiple)
                     imgs = F.interpolate(imgs, size=ns, mode='bilinear', align_corners=False) 
                     irs = F.interpolate(irs, size=ns, mode='bilinear', align_corners=False) #zjq
-            #breakpoint()
             # Forward
             with amp.autocast(enabled=cuda):
                 # t0 = time.time()
@@ -627,8 +626,8 @@ if __name__ == '__main__':
     parser.add_argument('--epochs', type=int, default=200)          #*changed default 300
     parser.add_argument('--ch_steam', type=int, default=3)
     parser.add_argument('--ch', type=int,default=128, help = '3 4 16 midfusion1:64 midfusion2,3:128 midfusion4:256')  #*changed from default to match SAM
-    parser.add_argument('--input_mode', type=str,default='RGB',help ='RGB IR RGB+IR(pixel-level fusion) RGB+IR+fusion(feature-level fusion)')
-    parser.add_argument('--batch-size', type=int, default=4, help='total batch size for all GPUs')    #* default 2
+    parser.add_argument('--input_mode', type=str,default='RGB+IR',help ='RGB IR RGB+IR(pixel-level fusion) RGB+IR+fusion(feature-level fusion)')
+    parser.add_argument('--batch-size', type=int, default=8, help='total batch size for all GPUs')    #* default 2
     parser.add_argument('--train_img_size', type=int,default=1024, help='train image sizes,if use SR,please set 1024')
     parser.add_argument('--test_img_size', type=int, default=512, help='test image sizes')
     parser.add_argument('--hr_input', default=True,action='store_true', help='high resolution input(1024*1024)') #if use SR,please set True
@@ -648,7 +647,7 @@ if __name__ == '__main__':
     parser.add_argument('--sync-bn', action='store_true', help='use SyncBatchNorm, only available in DDP mode')
     parser.add_argument('--local_rank', type=int, default=-1, help='DDP parameter, do not modify')
     parser.add_argument('--workers', type=int, default=4, help='maximum number of dataloader workers')
-    parser.add_argument('--project', default='outputs_SAM/yoloSAM_v2_p6_multiL_unfrozen_RGB/run/train', help='save to project/name')
+    parser.add_argument('--project', default='outputs_SAM/yoloSAM_v2_p6_multiL_unfrozen_RGBIR/run/train', help='save to project/name')
     parser.add_argument('--entity', default=None, help='W&B entity')
     parser.add_argument('--name', default='exp', help='save to project/name')
     parser.add_argument('--exist-ok', action='store_true', help='existing project/name ok, do not increment')
@@ -692,6 +691,7 @@ if __name__ == '__main__':
 
     # DDP mode
     opt.total_batch_size = opt.batch_size
+    print("cuda version: ", torch.version.cuda)
     device = select_device(opt.device, batch_size=opt.batch_size)
     #device = torch.device('cuda:0')
     if opt.local_rank != -1:

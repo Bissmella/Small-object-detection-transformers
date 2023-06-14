@@ -1,12 +1,9 @@
 # -*- coding: utf-8 -*-
-#SuperYolo with SAM image encoder backbone
-#used for training SRyolo with SAM backbone RGB mode SAM's original config (stride 16) but without loading SAM weights
-#this is file for experiment for comparing the overlapping and non-overlapping patches.
+#SuperYolo with resnet  backbone
+#used for training SRyolo with resnet50 backbone RGB mode 
 
 
-#@title SAM_Image_Encoder
-from basics.models.image_encoder import ImageEncoderViT, PatchEmbed, Block, Attention
-from basics.models.SAM_commons import MLPBlock, LayerNorm2d
+
 
 
 import argparse
@@ -34,7 +31,7 @@ from tqdm import tqdm
 # import test_up  # import test.py to get mAP after each epoch
 from basics.test import test
 from basics.models.experimental import attempt_load
-from basics.models.SRyolo import Model #zjq
+from basics.models.SRyolo_resnetbb_RGBIR import Model #zjq
 from basics.utils.autoanchor import check_anchors
 
 
@@ -109,21 +106,8 @@ def train(hyp, opt, device, tb_writer=None):
         logger.info('Transferred %g/%g items from %s' % (len(state_dict), len(model.state_dict()), weights))  # report
     else:
         model = Model(opt.cfg, input_mode = opt.input_mode ,ch_steam=opt.ch_steam,ch=opt.ch, nc=nc, anchors=hyp.get('anchors'),config=None,sr=opt.super,factor=down_factor).to(device)  # create
-        SAM_weights = torch.load("/home/bbahaduri/sryolo/weights/sam_vit_b_01ec64.pth")
-        vit_bb = {}
-        for key in SAM_weights.keys():
-            if key.startswith("image_encoder"):     #* and not key.startswith("image_encoder.patch_embed") and not key.startswith("image_encoder.pos_embed"): 
-                print(key)
-                vit_bb[key] = SAM_weights[key]
-        model.load_state_dict(vit_bb, strict=False)
-        print("related weights loaded from SAM")
-    '''
-    for name, param in model.named_parameters():
-         if name.startswith("image_encoder"):   #* and not name.startswith("image_encoder.patch_embed") and not name.startswith("image_encoder.pos_embed"):
-             param.requires_grad = False
-             #print(name, param.requires_grad)
-    '''
-             
+
+ 
     with torch_distributed_zero_first(rank):
         check_dataset(data_dict)  # check
     train_path = data_dict['train']
@@ -232,7 +216,6 @@ def train(hyp, opt, device, tb_writer=None):
         from basics.utils.datasets import create_dataloader_sr as create_dataloader
     else:
         from basics.utils.datasets import create_dataloader
-
     dataloader, dataset = create_dataloader(train_path, imgsz, batch_size, gs, opt,      #*changed
                                         hyp=hyp, augment=True, cache=opt.cache_images, rect=opt.rect, rank=rank,
                                         #world_size=opt.world_size,
@@ -250,8 +233,7 @@ def train(hyp, opt, device, tb_writer=None):
     # Process 0
     if rank in [-1, 0]:
         # if not opt.data.endswith('SRvedai.yaml'):
-
-        testloader = create_dataloader(test_path, imgsz, batch_size, gs, opt,  # testloader     #*changed  batch_size//2
+        testloader = create_dataloader(test_path, imgsz_test, batch_size, gs, opt,  # testloader     #*changed
                                     hyp=hyp, cache=opt.cache_images and not opt.notest, rect=False, rank=-1,
                                     #world_size=opt.world_size, 
                                     workers=opt.workers,pad=0.5,
@@ -279,7 +261,7 @@ def train(hyp, opt, device, tb_writer=None):
 
     # DDP mode
     if cuda and rank != -1:
-        model = DDP(model, device_ids=[opt.local_rank], output_device=opt.local_rank, find_unused_parameters=True)
+        model = DDP(model, device_ids=[opt.local_rank], output_device=opt.local_rank)
 
     # Model parameters
     hyp['box'] *= 3. / nl  # scale to layers
@@ -302,8 +284,7 @@ def train(hyp, opt, device, tb_writer=None):
     compute_loss = ComputeLoss(model)  # init loss class
     # attention_loss = LevelAttention_loss()
     # superloss = Superresolution_loss()
-
-    logger.info(f'Image sizes {imgsz} train, {imgsz} test\n'            #*imgsz_test
+    logger.info(f'Image sizes {imgsz} train, {imgsz_test} test\n'
                 f'Using {dataloader.num_workers} dataloader workers\n'
                 f'Logging results to {save_dir}\n'
                 f'Starting training for {epochs} epochs...')
@@ -341,12 +322,10 @@ def train(hyp, opt, device, tb_writer=None):
         model.train()
 
         #doing it once again:
-        '''
-        for name, param in model.module.named_parameters():
+        for name, param in model.named_parameters():
          if name.startswith("image_encoder"):   #* and not name.startswith("image_encoder.patch_embed") and not name.startswith("image_encoder.pos_embed"):
              param.requires_grad = False
-             print(name, param.requires_grad)
-        '''
+
         # Update image weights (optional)
         if opt.image_weights:
             # Generate indices
@@ -385,10 +364,7 @@ def train(hyp, opt, device, tb_writer=None):
             #down_factor = int(imgsz/imgsz_test)
             if down_factor>1:
                 imgs=F.interpolate(image,size=[i//down_factor for i in image.size()[2:]], mode='bilinear', align_corners=True)
-
                 irs=F.interpolate(ir_image,size=[i//down_factor for i in ir_image.size()[2:]], mode='bilinear', align_corners=True)
-                imgs=F.interpolate(imgs,size=[i*down_factor for i in imgs.size()[2:]], mode='bilinear', align_corners=True)  #*looks crazy but to make the result comparable with previous training and compatible with SAM backbone
-
             else:
                 imgs = image
                 irs = ir_image
@@ -415,7 +391,7 @@ def train(hyp, opt, device, tb_writer=None):
                     ns = [math.ceil(x * sf / gs) * gs for x in imgs.shape[2:]]  # new shape (stretched to gs-multiple)
                     imgs = F.interpolate(imgs, size=ns, mode='bilinear', align_corners=False) 
                     irs = F.interpolate(irs, size=ns, mode='bilinear', align_corners=False) #zjq
-            #breakpoint()
+
             # Forward
             with amp.autocast(enabled=cuda):
                 # t0 = time.time()
@@ -502,8 +478,8 @@ def train(hyp, opt, device, tb_writer=None):
             if not opt.notest or final_epoch:  # Calculate mAP
                 wandb_logger.current_epoch = epoch + 1
                 results, maps, times = test(data_dict,
-                                                 batch_size=batch_size, #*changed  * 2,
-                                                 imgsz=imgsz,     #*imgsz_test
+                                                 batch_size=batch_size * 2,
+                                                 imgsz=imgsz_test,
                                                  input_mode = opt.input_mode,
                                                  model=ema.ema,
                                                  single_cls=opt.single_cls,
@@ -581,7 +557,7 @@ def train(hyp, opt, device, tb_writer=None):
         if opt.data.endswith('coco.yaml') and nc == 80:  # if COCO
             for m in (last, best) if best.exists() else (last):  # speed, mAP tests
                 results, _, _ = test.test(opt.data,
-                                          batch_size=8,  #batch_size * 2
+                                          batch_size=batch_size * 2,
                                           imgsz=imgsz_test,
                                           conf_thres=0.001,
                                           iou_thres=0.7,
@@ -615,20 +591,20 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     #############################
     parser.add_argument('--weights', type=str, default='', help='initial weights path')
-    parser.add_argument('--cfg', type=str,default='codes/models/SRyolo_SAM_v3_orig.yaml', help='model.yaml path') #yolov5s
+    parser.add_argument('--cfg', type=str,default='codes/models/SRyolo_resnet50.yaml', help='model.yaml path') #yolov5s
     parser.add_argument('--super', default=False, action='store_true', help='super resolution')
     parser.add_argument('--data', type=str,default='codes/models/SRvedai.yaml', help='data.yaml path')
     parser.add_argument('--hyp', type=str, default='codes/models/hyp.scratch.yaml', help='hyperparameters path')
     parser.add_argument('--epochs', type=int, default=200)          #*changed default 300
     parser.add_argument('--ch_steam', type=int, default=3)
     parser.add_argument('--ch', type=int,default=128, help = '3 4 16 midfusion1:64 midfusion2,3:128 midfusion4:256')  #*changed from default to match SAM
-    parser.add_argument('--input_mode', type=str,default='RGB',help ='RGB IR RGB+IR(pixel-level fusion) RGB+IR+fusion(feature-level fusion)')
-    parser.add_argument('--batch-size', type=int, default=4, help='total batch size for all GPUs')    #* default 2
+    parser.add_argument('--input_mode', type=str,default='RGB+IR',help ='RGB IR RGB+IR(pixel-level fusion) RGB+IR+fusion(feature-level fusion)')
+    parser.add_argument('--batch-size', type=int, default=32, help='total batch size for all GPUs')    #* default 2
     parser.add_argument('--train_img_size', type=int,default=1024, help='train image sizes,if use SR,please set 1024')
     parser.add_argument('--test_img_size', type=int, default=512, help='test image sizes')
     parser.add_argument('--hr_input', default=True,action='store_true', help='high resolution input(1024*1024)') #if use SR,please set True
     parser.add_argument('--rect', action='store_true', help='rectangular training')
-    parser.add_argument('--resume', nargs='?', const=True, default=True, help='resume most recent training')
+    parser.add_argument('--resume', nargs='?', const=True, default=False, help='resume most recent training')
     parser.add_argument('--nosave', action='store_true', help='only save final checkpoint')
     parser.add_argument('--notest', action='store_true', help='only test final epoch')
     parser.add_argument('--noautoanchor', action='store_true', help='disable autoanchor check')
@@ -643,7 +619,7 @@ if __name__ == '__main__':
     parser.add_argument('--sync-bn', action='store_true', help='use SyncBatchNorm, only available in DDP mode')
     parser.add_argument('--local_rank', type=int, default=-1, help='DDP parameter, do not modify')
     parser.add_argument('--workers', type=int, default=4, help='maximum number of dataloader workers')
-    parser.add_argument('--project', default='outputs_SAM/yoloSAM_v2_s16_unfrozen_RGB/run/train', help='save to project/name')
+    parser.add_argument('--project', default='outputs/outputs_resnet50_128_RGBIR/run/train', help='save to project/name')
     parser.add_argument('--entity', default=None, help='W&B entity')
     parser.add_argument('--name', default='exp', help='save to project/name')
     parser.add_argument('--exist-ok', action='store_true', help='existing project/name ok, do not increment')
@@ -660,8 +636,8 @@ if __name__ == '__main__':
     #config = get_config(args)
 
     # Set DDP variables
-    opt.world_size = 2 #* changed int(os.environ['WORLD_SIZE']) if 'WORLD_SIZE' in os.environ else 1
-    opt.global_rank = opt.local_rank#int(os.environ['LOCAL_RANK']) if 'RANK' in os.environ else -1
+    opt.world_size = int(os.environ['WORLD_SIZE']) if 'WORLD_SIZE' in os.environ else 1
+    opt.global_rank = int(os.environ['RANK']) if 'RANK' in os.environ else -1
     set_logging(opt.global_rank)
     if opt.global_rank in [-1, 0]:
         check_git_status()
@@ -693,12 +669,9 @@ if __name__ == '__main__':
         assert torch.cuda.device_count() > opt.local_rank
         torch.cuda.set_device(opt.local_rank)
         device = torch.device('cuda', opt.local_rank)
-        os.environ["MASTER_ADDR"] = "localhost"
-        os.environ["MASTER_PORT"] = "12354"
-        dist.init_process_group(backend='nccl', rank=opt.local_rank, world_size=2) #init_method='env://')  # distributed backend  #*rank , environment
+        dist.init_process_group(backend='nccl', init_method='env://')  # distributed backend
         assert opt.batch_size % opt.world_size == 0, '--batch-size must be multiple of CUDA device count'
         opt.batch_size = opt.total_batch_size // opt.world_size
-        print("batch size ", opt.batch_size)
 
     # Hyperparameters
     with open(opt.hyp,encoding='utf-8') as f:
@@ -707,7 +680,6 @@ if __name__ == '__main__':
     
     # Train
     logger.info(opt)
-
     if not opt.evolve:
         tb_writer = None  # init loggers
         if opt.global_rank in [-1, 0]:
@@ -715,7 +687,7 @@ if __name__ == '__main__':
             logger.info(f"{prefix}Start with 'tensorboard --logdir {opt.project}', view at http://localhost:6006/")
             tb_writer = SummaryWriter(opt.save_dir)  # Tensorboard
         train(hyp, opt, device, tb_writer)
-        dist.destroy_process_group()
+
     # Evolve hyperparameters (optional)
     else:
         # Hyperparameter evolution metadata (mutation scale 0-1, lower_limit, upper_limit)
