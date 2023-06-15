@@ -222,10 +222,10 @@ class ImageEncoderViT(nn.Module):
         patches = self.patch_embed(x)
         #bs, h, w, c = x.shape
         r, g ,b, i = get_channels(x)
-        r = self.channel_embed_r(r).unsqueeze(1)      #x1[:,0,:,:].unsqueeze(1)).view(bs, 1, 1, 1536)
-        g = self.channel_embed_g(g).unsqueeze(1)      #x1[:,1,:,:].unsqueeze(1)).view(bs, 1, 1, 1536)
-        b = self.channel_embed_b(b).unsqueeze(1)      #x1[:,2,:,:].unsqueeze(1)).view(bs, 1, 1, 1536)
-        i = self.channel_embed_i(i).unsqueeze(1)       #x1[:,3,:,:].unsqueeze(1)).view(bs, 1, 1, 1536)
+        r = self.channel_embed_r(r)#.unsqueeze(1)      #x1[:,0,:,:].unsqueeze(1)).view(bs, 1, 1, 1536)
+        g = self.channel_embed_g(g)#.unsqueeze(1)      #x1[:,1,:,:].unsqueeze(1)).view(bs, 1, 1, 1536)
+        b = self.channel_embed_b(b)#.unsqueeze(1)      #x1[:,2,:,:].unsqueeze(1)).view(bs, 1, 1, 1536)
+        i = self.channel_embed_i(i)#.unsqueeze(1)       #x1[:,3,:,:].unsqueeze(1)).view(bs, 1, 1, 1536)
 
         # x = torch.cat((r, g, b, i), 1)
         # bs, c , h, w, emb = x.shape
@@ -423,11 +423,16 @@ class CAttentionBlock(nn.Module):
         self.norm5 = nn.LayerNorm(out_dim)
 
     def forward(self, r: torch.Tensor, g: torch.Tensor, b: torch.Tensor, ir: torch.Tensor):
-        _, _, h, w, _ = r.shape
-        r =channel_partition(r)
-        g = channel_partition(g)
-        b = channel_partition(b)
-        ir = channel_partition(ir)
+        b1, h, w, c = r.shape
+        r, r_hw =window_partition(r, 2)
+        g, g_hw = window_partition(g, 2)
+        b, b_hw = window_partition(b, 2)
+        ir, ir_hw = window_partition(ir, 2)
+        b2, h2, w2, c2 = r.shape
+        r = r.reshape(b2, h2 * w2, c2)
+        g = g.reshape(b2, h2 * w2, c2)
+        b = b.reshape(b2, h2 * w2, c2)
+        ir = ir.reshape(b2, h2 * w2, c2)
 
         attn_out = self.r2g_attn(q = r, k =g, v =g)
         x1 = r + attn_out
@@ -446,10 +451,16 @@ class CAttentionBlock(nn.Module):
         x4 = ir + attn_out
         x4 = self.norm4(x4)
 
-        x1 = channel_unpartition(x1, h, w)
-        x2 = channel_unpartition(x2, h, w)
-        x3 = channel_unpartition(x3, h, w)
-        x4 = channel_unpartition(x4, h, w)
+
+        x1 = x1.view(b2, h2, w2, c2)
+        x2 = x2.view(b2, h2, w2, c2)
+        x3 = x3.view(b2, h2, w2, c2)
+        x4 = x4.view(b2, h2, w2, c2)
+
+        x1 = window_unpartition(x1, 2, r_hw, (h, w))
+        x2 = window_unpartition(x2, 2, g_hw, (h, w))
+        x3 = window_unpartition(x3, 2, b_hw, (h, w))
+        x4 = window_unpartition(x4, 2, ir_hw, (h, w))
         x = torch.cat((x1, x2, x3, x4), dim=-1)
         x = self.fc_layer(x)
         x = self.dropout(x)
@@ -471,7 +482,6 @@ class CAttention(nn.Module):
                 self.v_proj = nn.Linear(embedding_dim, embedding_dim)
 
     def _separate_heads(self, x: torch.Tensor, num_heads: int) -> torch.Tensor:
-        
         b, n, c = x.shape
         x = x.reshape(b, n, num_heads, c // num_heads)
         return x.transpose(1, 2)
@@ -505,6 +515,7 @@ def window_partition(x: torch.Tensor, window_size: int) -> Tuple[torch.Tensor, T
     Args:
         x (tensor): input tokens with [B, H, W, C].
         window_size (int): window size.
+
     Returns:
         windows: windows after partition with [B * num_windows, window_size, window_size, C].
         (Hp, Wp): padded height and width before partition
@@ -512,15 +523,19 @@ def window_partition(x: torch.Tensor, window_size: int) -> Tuple[torch.Tensor, T
     B, H, W, C = x.shape
 
     pad_h = (window_size - H % window_size) % window_size
-    pad_w = (window_size +1 - W % (window_size + 1)) % (window_size + 1)  #+1 has beend added to the width dimension to compensate for the added channel dimension
+    pad_w = (window_size - W % window_size) % window_size
     if pad_h > 0 or pad_w > 0:
         x = F.pad(x, (0, 0, 0, pad_w, 0, pad_h))
     Hp, Wp = H + pad_h, W + pad_w
-    x = x.view(B, Hp // window_size, window_size, Wp // (window_size + 1), window_size + 1, C)
-    windows = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(-1, window_size, window_size +1, C)
+
+    x = x.view(B, Hp // window_size, window_size, Wp // window_size, window_size, C)
+    windows = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(-1, window_size, window_size, C)
     return windows, (Hp, Wp)
 
-def window_unpartition(windows: torch.Tensor, window_size: int, pad_hw: Tuple[int, int], hw: Tuple[int, int]) -> torch.Tensor:
+
+def window_unpartition(
+    windows: torch.Tensor, window_size: int, pad_hw: Tuple[int, int], hw: Tuple[int, int]
+) -> torch.Tensor:
     """
     Window unpartition into original sequences and removing padding.
     Args:
@@ -528,13 +543,14 @@ def window_unpartition(windows: torch.Tensor, window_size: int, pad_hw: Tuple[in
         window_size (int): window size.
         pad_hw (Tuple): padded height and width (Hp, Wp).
         hw (Tuple): original height and width (H, W) before padding.
+
     Returns:
         x: unpartitioned sequences with [B, H, W, C].
     """
     Hp, Wp = pad_hw
     H, W = hw
-    B = windows.shape[0] // (Hp * Wp // window_size // (window_size+1))
-    x = windows.view(B, Hp // window_size, Wp // (window_size+1), window_size, window_size + 1, -1)
+    B = windows.shape[0] // (Hp * Wp // window_size // window_size)
+    x = windows.view(B, Hp // window_size, Wp // window_size, window_size, window_size, -1)
     x = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(B, Hp, Wp, -1)
 
     if Hp > H or Wp > W:
