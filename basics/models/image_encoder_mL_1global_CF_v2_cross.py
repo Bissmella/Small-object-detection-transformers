@@ -48,9 +48,10 @@ class ImageEncoderViT(nn.Module):
         super().__init__()
         self.img_size = img_size
         self.patch_embed = PatchEmbed(
-            kernel_size=(patch_size, patch_size),
-            stride=(4, 4),         #*changed from patch_size, patch_size to 8, 8 to get half-overlapping 64 x 64 dimension patches
-            in_chans=in_chans,
+            kernel_size=(1, 1),  #patch_size
+            stride=(1, 1),         #* previoulsy 4  changed from patch_size, patch_size to 8, 8 to get half-overlapping 64 x 64 dimension patches
+            padding = (0, 0),
+            in_chans=192,
             embed_dim=embed_dim,
         )
 
@@ -219,7 +220,7 @@ class ImageEncoderViT(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         #fuse channels:
         
-        patches = self.patch_embed(x)
+        ##patches = self.patch_embed(x)
         #bs, h, w, c = x.shape
         r, g ,b, i = get_channels(x)
         r = self.channel_embed_r(r)#.unsqueeze(1)      #x1[:,0,:,:].unsqueeze(1)).view(bs, 1, 1, 1536)
@@ -238,13 +239,15 @@ class ImageEncoderViT(nn.Module):
         # x = x.view(bs, h, w, 1, -1).squeeze(3)
         # x = self.fc_layer(x)
 
-        x1 = self.chan_block(r, g, b, i)
+        x = self.chan_block(r, g, b, i)
+        x = x.permute(0, 3, 1, 2)
+        x = self.patch_embed(x)
 
         y = []
         if self.pos_embed is not None:
-            if patches.shape[1] == self.pos_embed.shape[1]:
-                patches = patches + self.pos_embed
-        x = x1 + patches
+            if x.shape[1] == self.pos_embed.shape[1]: #patches before
+                x = x + self.pos_embed
+        #x = x1 + patches
 
         for i in range(len(self.blocks)):
             x = self.blocks[i](x)
@@ -417,10 +420,10 @@ class CAttentionBlock(nn.Module):
         self.ir2rgb_attn = CAttention(embedding_dim, num_heads)
         self.norm4 = nn.LayerNorm(embedding_dim)
         
-        self.fc_layer = nn.Linear (192, out_dim)
-        self.dropout = nn.Dropout(0.4)
-        self.mlp = MLPBlock(out_dim, 256, activation)
-        self.norm5 = nn.LayerNorm(out_dim)
+        # self.fc_layer = nn.Linear (192, out_dim)
+        # #self.dropout = nn.Dropout(0.4)
+        # self.mlp = MLPBlock(out_dim, 256, activation)
+        # self.norm5 = nn.LayerNorm(out_dim)
 
     def forward(self, r: torch.Tensor, g: torch.Tensor, b: torch.Tensor, ir: torch.Tensor):
         b1, h, w, c = r.shape
@@ -462,10 +465,10 @@ class CAttentionBlock(nn.Module):
         x3 = window_unpartition(x3, 2, b_hw, (h, w))
         x4 = window_unpartition(x4, 2, ir_hw, (h, w))
         x = torch.cat((x1, x2, x3, x4), dim=-1)
-        x = self.fc_layer(x)
-        x = self.dropout(x)
-        x = self.mlp(x)
-        x = self.norm5(x)
+        # x = self.fc_layer(x)
+        # #x = self.dropout(x)
+        # x = self.mlp(x)
+        # x = self.norm5(x)
         return x
 
 class CAttention(nn.Module):
