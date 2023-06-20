@@ -221,7 +221,12 @@ class Model(nn.Module):
         elif string == 'yolo': 
             # for samDet
             #TO DO SAM should be modified so it output image embedding as well
-            _outputs, feature_maps = self.mask_generator(x)
+            # breakpoint()
+            # feature_maps = self.sam.image_encoder(x)
+            # breakpoint()
+            # point_grids = build_all_layer_point_grids(64, 0, 1)
+            breakpoint()
+            _outputs, feature_maps = self.mask_generator.generate(x)
 
             #TO DO: filter the outputs and take the boxes of 300 or 400
             breakpoint()

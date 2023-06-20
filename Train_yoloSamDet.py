@@ -41,7 +41,7 @@ from basics.utils.general import labels_to_class_weights, increment_path, labels
     fitness, strip_optimizer, get_latest_run, check_dataset, check_file, check_git_status, check_img_size, \
     check_requirements, print_mutation, set_logging, one_cycle, colorstr
 from basics.utils.google_utils import attempt_download
-from basics.utils.loss import ComputeLoss
+from basics.utils.loss_samDet import ComputeLoss
 from basics.utils.plots import plot_images, plot_labels, plot_results, plot_evolution,plot_lr_scheduler
 from basics.utils.torch_utils import ModelEMA, select_device, intersect_dicts, torch_distributed_zero_first, is_parallel
 from basics.utils.wandb_logging.wandb_utils import WandbLogger, check_wandb_resume
@@ -385,6 +385,11 @@ def train(hyp, opt, device, tb_writer=None):
 
                 irs=F.interpolate(ir_image,size=[i//down_factor for i in ir_image.size()[2:]], mode='bilinear', align_corners=True)
                 imgs=F.interpolate(imgs,size=[i*down_factor for i in imgs.size()[2:]], mode='bilinear', align_corners=True)  #*looks crazy but to make the result comparable with previous training and compatible with SAM backbone
+                pixel_mean= [123.675, 116.28, 103.53]
+                pixel_std= [58.395, 57.12, 57.375]
+                imgs = imgs.permute(0, 2, 3, 1)
+                imgs = (imgs - torch.tensor(pixel_mean).to(device)) / torch.tensor(pixel_std).to(device)
+                imgs = imgs.permute(0, 3, 1, 2)
 
             else:
                 imgs = image
