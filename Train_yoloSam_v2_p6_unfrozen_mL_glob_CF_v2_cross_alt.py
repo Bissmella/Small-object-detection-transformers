@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
 #SuperYolo with SAM image encoder backbone
-#used for training SRyolo with SAM backbone frozen weights RGB mode SAM's original config (stride 16)
+#used for training SRyolo with SAM backbone RGB mode SAM's original config (stride 16) but without loading SAM weights
+#this is file for experiment for comparing the overlapping and non-overlapping patches.
 
 
 #@title SAM_Image_Encoder
-from basics.models.image_encoder import ImageEncoderViT, PatchEmbed, Block, Attention
-from basics.models.SAM_commons import MLPBlock, LayerNorm2d
+#from basics.models.image_encoder_mL_1global import ImageEncoderViT, PatchEmbed, Block, Attention
+#from basics.models.SAM_commons import MLPBlock, LayerNorm2d
 
 
 import argparse
@@ -33,7 +34,7 @@ from tqdm import tqdm
 # import test_up  # import test.py to get mAP after each epoch
 from basics.test import test
 from basics.models.experimental import attempt_load
-from basics.models.SRyolo_samDet import Model #zjq
+from basics.models.SRyolo_multiL_glob_CF_v2_cross_alt import Model #zjq
 from basics.utils.autoanchor import check_anchors
 
 
@@ -41,7 +42,7 @@ from basics.utils.general import labels_to_class_weights, increment_path, labels
     fitness, strip_optimizer, get_latest_run, check_dataset, check_file, check_git_status, check_img_size, \
     check_requirements, print_mutation, set_logging, one_cycle, colorstr
 from basics.utils.google_utils import attempt_download
-from basics.utils.loss_samDet import ComputeLoss
+from basics.utils.loss import ComputeLoss
 from basics.utils.plots import plot_images, plot_labels, plot_results, plot_evolution,plot_lr_scheduler
 from basics.utils.torch_utils import ModelEMA, select_device, intersect_dicts, torch_distributed_zero_first, is_parallel
 from basics.utils.wandb_logging.wandb_utils import WandbLogger, check_wandb_resume
@@ -108,15 +109,25 @@ def train(hyp, opt, device, tb_writer=None):
         logger.info('Transferred %g/%g items from %s' % (len(state_dict), len(model.state_dict()), weights))  # report
     else:
         model = Model(opt.cfg, input_mode = opt.input_mode ,ch_steam=opt.ch_steam,ch=opt.ch, nc=nc, anchors=hyp.get('anchors'),config=None,sr=opt.super,factor=down_factor).to(device)  # create
+        '''
+        #* loading SAM backbone weights
+        SAM_weights = torch.load("/home/bbahaduri/sryolo/weights/sam_vit_b_01ec64.pth")
+        vit_bb = {}
+        for key in SAM_weights.keys():
+            if key.startswith("image_encoder"):     #* and not key.startswith("image_encoder.patch_embed") and not key.startswith("image_encoder.pos_embed"): 
+                print(key)
+                vit_bb[key] = SAM_weights[key]
+        model.load_state_dict(vit_bb, strict=False)
+        print("related weights loaded from SAM")
         
-        
-
-    #  setting requires_grad of sam to false
-    for name, param in model.named_parameters():
-         if name.startswith("sam"):   #* and not name.startswith("image_encoder.patch_embed") and not name.startswith("image_encoder.pos_embed"):
+        for name, param in model.named_parameters():
+         if name.startswith("image_encoder"):   #* and not name.startswith("image_encoder.patch_embed") and not name.startswith("image_encoder.pos_embed"):
              param.requires_grad = False
              #print(name, param.requires_grad)
+        '''
+        
     
+    #breakpoint()
     with torch_distributed_zero_first(rank):
         check_dataset(data_dict)  # check
     train_path = data_dict['train']
@@ -172,9 +183,8 @@ def train(hyp, opt, device, tb_writer=None):
         lf = one_cycle(1, hyp['lrf'], epochs)  # cosine 1->hyp['lrf']
     scheduler = lr_scheduler.LambdaLR(optimizer, lr_lambda=lf)
     # plot_lr_scheduler(optimizer, scheduler, epochs)
-
     # EMA
-    ema = ModelEMA(model) if rank in [-1, 0] else None
+    ema = ModelEMA(model) if rank in [-1, 0] else None   #* changed to None
 
     # Resume
     start_epoch, best_fitness = 0, 0.0
@@ -205,11 +215,9 @@ def train(hyp, opt, device, tb_writer=None):
         del ckpt, state_dict
     # start_epoch = 98 #zjq
     # Image sizes
-    #* removed checking the image size with grid size
-    # gs = max(int(model.stride.max()), 32)  # grid size (max stride)
-    # nl = model.detect[-1].nl  # number of detection layers (used for scaling hyp['obj'])   #* changed model.model[-1]   to model.detect
-    gs = 16
-    imgsz, imgsz_test = [x for x in opt.img_size]  #  check_img_size(x, gs) removed verify imgsz are gs-multiples
+    gs = max(int(model.stride.max()), 32)  # grid size (max stride)
+    nl = model.detect[-1].nl  # number of detection layers (used for scaling hyp['obj'])   #* changed model.model[-1]   to model.detect
+    imgsz, imgsz_test = [check_img_size(x, gs) for x in opt.img_size]  # verify imgsz are gs-multiples
 
     # DP mode
     if cuda and rank == -1 and torch.cuda.device_count() > 1:
@@ -246,7 +254,7 @@ def train(hyp, opt, device, tb_writer=None):
     if rank in [-1, 0]:
         # if not opt.data.endswith('SRvedai.yaml'):
 
-        testloader = create_dataloader(test_path, imgsz, batch_size, gs, opt,  # testloader  //2   #*changed
+        testloader = create_dataloader(test_path, imgsz_test, batch_size, gs, opt,  # testloader     #*changed  batch_size//2
                                     hyp=hyp, cache=opt.cache_images and not opt.notest, rect=False, rank=-1,
                                     #world_size=opt.world_size, 
                                     workers=opt.workers,pad=0.5,
@@ -268,9 +276,8 @@ def train(hyp, opt, device, tb_writer=None):
                     tb_writer.add_histogram('classes', c, 0)
 
             # Anchors
-            #* changed for samDet
-            # if not opt.noautoanchor:
-            #     check_anchors(dataset, model=model, thr=hyp['anchor_t'], imgsz=imgsz)
+            if not opt.noautoanchor:
+                check_anchors(dataset, model=model, thr=hyp['anchor_t'], imgsz=imgsz)
             model.half().float()  # pre-reduce anchor precision
 
     # DDP mode
@@ -278,7 +285,6 @@ def train(hyp, opt, device, tb_writer=None):
         model = DDP(model, device_ids=[opt.local_rank], output_device=opt.local_rank, find_unused_parameters=True)
 
     # Model parameters
-    nl = 1
     hyp['box'] *= 3. / nl  # scale to layers
     hyp['cls'] *= nc / 80. * 3. / nl  # scale to classes and layers
     hyp['obj'] *= (imgsz / 640) ** 2 * 3. / nl  # scale to image size and layers
@@ -300,7 +306,7 @@ def train(hyp, opt, device, tb_writer=None):
     # attention_loss = LevelAttention_loss()
     # superloss = Superresolution_loss()
 
-    logger.info(f'Image sizes {imgsz} train, {imgsz} test\n'            #*imgsz_test
+    logger.info(f'Image sizes {imgsz} train, {imgsz_test} test\n'            #*imgsz_test
                 f'Using {dataloader.num_workers} dataloader workers\n'
                 f'Logging results to {save_dir}\n'
                 f'Starting training for {epochs} epochs...')
@@ -337,13 +343,14 @@ def train(hyp, opt, device, tb_writer=None):
         # model.module.conv5.t = t
         model.train()
 
+        '''
+        #*changed freezing parameters for SAM backbone
         #doing it once again:
-        
-        for name, param in model.named_parameters():
-         if name.startswith("sam"):   #* and not name.startswith("image_encoder.patch_embed") and not name.startswith("image_encoder.pos_embed"):
+        for name, param in model.module.named_parameters():
+         if name.startswith("image_encoder"):   #* and not name.startswith("image_encoder.patch_embed") and not name.startswith("image_encoder.pos_embed"):
              param.requires_grad = False
-            
-        
+             print(name, param.requires_grad)
+        '''
         # Update image weights (optional)
         if opt.image_weights:
             # Generate indices
@@ -384,13 +391,7 @@ def train(hyp, opt, device, tb_writer=None):
                 imgs=F.interpolate(image,size=[i//down_factor for i in image.size()[2:]], mode='bilinear', align_corners=True)
 
                 irs=F.interpolate(ir_image,size=[i//down_factor for i in ir_image.size()[2:]], mode='bilinear', align_corners=True)
-                # imgs=F.interpolate(imgs,size=[i*down_factor for i in imgs.size()[2:]], mode='bilinear', align_corners=True)  #*looks crazy but to make the result comparable with previous training and compatible with SAM backbone
-                # pixel_mean= [123.675, 116.28, 103.53]
-                # pixel_std= [58.395, 57.12, 57.375]
-                # imgs = imgs.permute(0, 2, 3, 1)
-                # imgs = (imgs - torch.tensor(pixel_mean).to(device)) / torch.tensor(pixel_std).to(device)
-                imgs = imgs.squeeze(0)
-                imgs = imgs.permute(1, 2, 0)
+                #imgs=F.interpolate(imgs,size=[i*down_factor for i in imgs.size()[2:]], mode='bilinear', align_corners=True)  #*looks crazy but to make the result comparable with previous training and compatible with SAM backbone
 
             else:
                 imgs = image
@@ -506,7 +507,7 @@ def train(hyp, opt, device, tb_writer=None):
                 wandb_logger.current_epoch = epoch + 1
                 results, maps, times = test(data_dict,
                                                  batch_size=batch_size, #*changed  * 2,
-                                                 imgsz=imgsz,     #*imgsz_test
+                                                 imgsz=imgsz_test,     #*imgsz_test
                                                  input_mode = opt.input_mode,
                                                  model=ema.ema,
                                                  single_cls=opt.single_cls,
@@ -618,26 +619,26 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     #############################
     parser.add_argument('--weights', type=str, default='', help='initial weights path')
-    parser.add_argument('--cfg', type=str,default='codes/models/SRyolo_SAM_v3_orig.yaml', help='model.yaml path') #yolov5s
+    parser.add_argument('--cfg', type=str,default='codes/models/SRyolo_SAM_v3_orig_multiL_glob_CF.yaml', help='model.yaml path') #yolov5s
     parser.add_argument('--super', default=False, action='store_true', help='super resolution')
     parser.add_argument('--data', type=str,default='codes/models/SRvedai.yaml', help='data.yaml path')
     parser.add_argument('--hyp', type=str, default='codes/models/hyp.scratch.yaml', help='hyperparameters path')
     parser.add_argument('--epochs', type=int, default=200)          #*changed default 300
     parser.add_argument('--ch_steam', type=int, default=3)
     parser.add_argument('--ch', type=int,default=128, help = '3 4 16 midfusion1:64 midfusion2,3:128 midfusion4:256')  #*changed from default to match SAM
-    parser.add_argument('--input_mode', type=str,default='RGB',help ='RGB IR RGB+IR(pixel-level fusion) RGB+IR+fusion(feature-level fusion)')
-    parser.add_argument('--batch-size', type=int, default=1, help='total batch size for all GPUs')    #* default 2
+    parser.add_argument('--input_mode', type=str,default='RGB+IR',help ='RGB IR RGB+IR(pixel-level fusion) RGB+IR+fusion(feature-level fusion)')
+    parser.add_argument('--batch-size', type=int, default=8, help='total batch size for all GPUs')    #* default 2
     parser.add_argument('--train_img_size', type=int,default=1024, help='train image sizes,if use SR,please set 1024')
     parser.add_argument('--test_img_size', type=int, default=512, help='test image sizes')
     parser.add_argument('--hr_input', default=True,action='store_true', help='high resolution input(1024*1024)') #if use SR,please set True
     parser.add_argument('--rect', action='store_true', help='rectangular training')
-    parser.add_argument('--resume', nargs='?', const=True, default=False, help='resume most recent training')
+    parser.add_argument('--resume', nargs='?', const=True, default=True, help='resume most recent training')
     parser.add_argument('--nosave', action='store_true', help='only save final checkpoint')
     parser.add_argument('--notest', action='store_true', help='only test final epoch')
     parser.add_argument('--noautoanchor', action='store_true', help='disable autoanchor check')
     parser.add_argument('--evolve', action='store_true', help='evolve hyperparameters')
     parser.add_argument('--bucket', type=str, default='', help='gsutil bucket')
-    parser.add_argument('--cache-images', action='store_true', default = False, help='cache images for faster training')  #* changed
+    parser.add_argument('--cache-images', action='store_true', default = True, help='cache images for faster training')  #* changed
     parser.add_argument('--image-weights', action='store_true', help='use weighted image selection for training')
     parser.add_argument('--device', default='0', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
     parser.add_argument('--multi-scale', action='store_true', help='vary img-size +/- 50%%')
@@ -646,7 +647,7 @@ if __name__ == '__main__':
     parser.add_argument('--sync-bn', action='store_true', help='use SyncBatchNorm, only available in DDP mode')
     parser.add_argument('--local_rank', type=int, default=-1, help='DDP parameter, do not modify')
     parser.add_argument('--workers', type=int, default=4, help='maximum number of dataloader workers')
-    parser.add_argument('--project', default='outputs_SAM/yoloSAMDET_vitB_RGB/run/train', help='save to project/name')
+    parser.add_argument('--project', default='outputs_SAM/yoloSAM_v2_p6_multiL_RGBIR_glob_CF_v2_cross_alt/run/train', help='save to project/name')
     parser.add_argument('--entity', default=None, help='W&B entity')
     parser.add_argument('--name', default='exp', help='save to project/name')
     parser.add_argument('--exist-ok', action='store_true', help='existing project/name ok, do not increment')
@@ -663,8 +664,8 @@ if __name__ == '__main__':
     #config = get_config(args)
 
     # Set DDP variables
-    opt.world_size = int(os.environ['WORLD_SIZE']) if 'WORLD_SIZE' in os.environ else 1 
-    opt.global_rank = int(os.environ['LOCAL_RANK']) if 'RANK' in os.environ else -1 
+    opt.world_size = 2 #* changed int(os.environ['WORLD_SIZE']) if 'WORLD_SIZE' in os.environ else 1
+    opt.global_rank = opt.local_rank#int(os.environ['LOCAL_RANK']) if 'RANK' in os.environ else -1
     set_logging(opt.global_rank)
     if opt.global_rank in [-1, 0]:
         check_git_status()
@@ -697,7 +698,7 @@ if __name__ == '__main__':
         torch.cuda.set_device(opt.local_rank)
         device = torch.device('cuda', opt.local_rank)
         os.environ["MASTER_ADDR"] = "localhost"
-        os.environ["MASTER_PORT"] = "12356"
+        os.environ["MASTER_PORT"] = "12354"
         dist.init_process_group(backend='nccl', rank=opt.local_rank, world_size=2) #init_method='env://')  # distributed backend  #*rank , environment
         assert opt.batch_size % opt.world_size == 0, '--batch-size must be multiple of CUDA device count'
         opt.batch_size = opt.total_batch_size // opt.world_size

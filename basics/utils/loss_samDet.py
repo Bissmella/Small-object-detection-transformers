@@ -170,67 +170,51 @@ class ComputeLoss:
 
     def build_targets(self, p, targets):
         # Build targets for compute_loss(), input targets(image,class,x,y,w,h)
-
-        #p should be the output of SAM; we match it with the targets
-        breakoint()
-        na, nt = self.na, targets.shape[0]  # number of anchors, targets
+        '''
+        changed from original build_targets
+        inputs:
+            -p: prposals not predictiosn, in shape of b x n x 4 or n x 5
+            -targets (image, class, x,y,w,h)
+        outputs:
+            -indices: list of tuples including tensors one for batch index / image id, and another for
+            proposal index. used to get proposal specific for subsequent tbox and tcls
+            -tbox: list of tensors including difference xywh of each ground truth from corresponding
+            proposal
+            -tcls: list of tensors including class values corresponding to relevant tbox
+        '''
+        #p should be the output of SAM; we match it with the targets having shape of [batch, x, y, w, h]
+        breakpoint()
+        #assum p is output of SAM
+        preds = torch.zeros(p.shape[0])     #
         tcls, tbox, indices, anch = [], [], [], []
-        gain = torch.ones(7, device=targets.device)  # normalized to gridspace gain
-        ai = torch.arange(na, device=targets.device).float().view(na, 1).repeat(1, nt)  # same as .repeat_interleave(nt) 
-        targets = torch.cat((targets.repeat(na, 1, 1), ai[:, :, None]), 2)  # append anchor indices
+        tbox = []
+        tcls = []  #8 is the number of classes
+        batches =[]
+        proposal_idx = []
+        for target in targets:
+            iou_p = bbox_iou(target, p, x1y1x2y2=False, CIoU=True)  #iou between target and proposals of same image [target[0]] as index for proposals of same image
+            iou_indices = iou_p.argsort(descending=True, dim=0)
+            for iou_index in iou_indices:
+                p_taken = preds[iou_index] == 0
 
-        g = 0.5  # bias
-        off = torch.tensor([[0, 0],
-                            [1, 0], [0, 1], [-1, 0], [0, -1],  # j,k,l,m
-                            # [1, 1], [1, -1], [-1, 1], [-1, -1],  # jk,jm,lk,lm
-                            ], device=targets.device).float() * g  # offsets
-        
-        for i in range(self.nl):
-            anchors = self.anchors[i]
-            gain[2:6] = torch.tensor(p[i].shape)[[3, 2, 3, 2]]  # xyxy gain 获得当前输出层的宽高
+                if not p_taken:
+                    preds[iou_index] = 1    #proposal taken
+                    tbox[iou_index][0] = 1  #objectness
+                    xy = [target[2]-p[0], target[3] - p[1]]  # difference of ground-truth and proposal xy
+                    wh = [target[4] - p[2], target[5] - p[3]] # difference of ground-truth and porposal wh
+                    cls = torch.zeros(8)  #8 is number of classes hard coded
+                    cls[target[1]] = 1   #corresponding class index set to 1 others zero
+                    batches.append(target[0])   #batch index / image id
+                    proposal_idx.append(iou_index)    #proposal number
+                    box = torch.cat((torch.tensor(xy), torch.tensor(wh)))
+                    tbox.append(box)
+                    tcls.append(cls)
+                
 
-            # Match targets to anchors
-            t = targets * gain # 真实框相对坐标*输出层大小 = 真实框的绝对坐标  [num_anchors, num_targets, image_index + cls_id + bbox + anchor_index]
-            if nt:
-                # Matches
-                #这个部分是计算gt和anchor的匹配程度
-                r = t[:, :, 4:6] / anchors[:, None]  # wh ratio # wh ratio  真实框wh/锚框wh  [num_anchors, num_targets, w+h]
-                j = torch.max(r, 1. / r).max(2)[0] < self.hyp['anchor_t']  # compare 找出锚框与真实框高和宽的比值都小于4的锚框
-                # j = wh_iou(anchors, t[:, 4:6]) > model.hyp['iou_t']  # iou(3,n)=wh_iou(anchors(3,2), gwh(n,2))
-                #将满足条件的targets筛选出来。
-                t = t[j]  # filter
+        indices.append((torch.tensor(batches), torch.tensor(proposal_idx)))
+        return tcls, tbox, indices
 
-                # Offsets
-                # 找到这是框的中心点，再添加两个距离它最近的两个点也作为正样本
-                #这个部分就是扩充targets的数量，将比较targets附近的4个点，选取最近的2个点作为新targets中心，新targets的w、h使用与原targets一致，只是中心点坐标的不同。
-                # 参考博文https://blog.csdn.net/cdknight_happy/article/details/109817548#t11
-                # x小于0.5就靠近左边的网格，y小于0.5就靠近上边的网格
-                gxy = t[:, 2:4]  # grid xy 真实框中心坐标x, y
-                gxi = gain[[2, 3]] - gxy  # inverse 求反，通过下面的判断求出中心点偏移的方向
-                j, k = ((gxy % 1. < g) & (gxy > 1.)).T # gxy % 1. 意思就是求得坐标xy后的小数点，也就是相对每个网格的偏移量  j代表x，k代表y
-                l, m = ((gxi % 1. < g) & (gxi > 1.)).T  ## gxi % 1. < g 偏移量不能超过0.5，
-                j = torch.stack((torch.ones_like(j), j, k, l, m)) ## [5, num_targets] 包括target中心点和他的四个相邻网格（下、右、上、左）
-                t = t.repeat((5, 1, 1))[j] ##筛选后t的数量是原来t的3倍。
-                offsets = (torch.zeros_like(gxy)[None] + off[:, None])[j] ## 选择网格
-            else:
-                t = targets[0]
-                offsets = 0
 
-            # Define
-            b, c = t[:, :2].long().T  # image, class
-            gxy = t[:, 2:4]  # grid xy
-            gwh = t[:, 4:6]  # grid wh
-            gij = (gxy - offsets).long()
-            gi, gj = gij.T  # grid xy indices  第几个网格为正样本
-
-            # Append
-            a = t[:, 6].long()  # anchor indices
-            indices.append((b, a, gj.clamp_(0, gain[3].long() - 1), gi.clamp_(0, gain[2].long() - 1)))  # image, anchor, grid indices 该网格是哪张图片的，并由哪个锚框进行预测 #*changed casted to long
-            tbox.append(torch.cat((gxy - gij, gwh), 1))  # box 添加真实框的中心点坐标相对于所在网格的偏移量，宽高
-            anch.append(anchors[a])  # anchors 添加锚框
-            tcls.append(c)  # class
-
-        return tcls, tbox, indices, anch
 
 class LevelAttention_loss(nn.Module):
 
