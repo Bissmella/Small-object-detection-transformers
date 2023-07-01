@@ -229,7 +229,7 @@ def train(hyp, opt, device, tb_writer=None):
         from basics.utils.datasets import create_dataloader
 
     dataloader, dataset = create_dataloader(train_path, imgsz, batch_size, gs, opt,      #*changed
-                                        hyp=hyp, augment=True, cache=opt.cache_images, rect=opt.rect, rank=rank,
+                                        hyp=hyp, augment=False, cache=opt.cache_images, rect=opt.rect, rank=rank, #*changed for SAM
                                         #world_size=opt.world_size,
                                         workers=opt.workers,
                                         image_weights=opt.image_weights, quad=opt.quad, prefix=colorstr('train: '))
@@ -429,11 +429,11 @@ def train(hyp, opt, device, tb_writer=None):
                 # elif not opt.super and not opt.super_attention and opt.attention:
                 #     pred, attention_mask,_ = model(imgs,irs,opt.input_mode)
                 else:
-                    pred,_ = model(imgs,irs,opt.input_mode)
+                    propos, pred = model(imgs,irs,opt.input_mode)
                 # t1 = time.time()
                 # print(t1-t0)
-                #breakpoint()
-                loss, lbox , lobj , lcls  = compute_loss(pred, targets.to(device))  # loss scaled by batch_size
+                breakpoint()
+                loss, lbox , lobj , lcls  = compute_loss(pred, propos.to(device), targets.to(device))  # loss scaled by batch_size
                 loss_items = torch.cat((lbox, lobj, lcls, loss)).detach()
                 if opt.super: #and not opt.attention and not opt.super_attention:    
                     if opt.input_mode =='IR':

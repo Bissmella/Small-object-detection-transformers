@@ -228,6 +228,7 @@ class Model(nn.Module):
             # point_grids = build_all_layer_point_grids(64, 0, 1)
             breakpoint()
             _outputs, feature_maps = self.mask_generator.generate(x)
+            breakpoint()
             max_num_boxes = 400
             if len(_outputs) > 400:
                 sorted_list = sorted(_outputs, key=lambda x: x['predicted_iou'], reverse=True)
@@ -240,11 +241,11 @@ class Model(nn.Module):
                 _outputs = [d['bbox'] for d in _outputs]
             #TO DO: filter the outputs and take the boxes of 300 or 400
             breakpoint()
-            proposals = torch.tensor(_outputs) / 16.0
+            proposals = torch.tensor(_outputs) / 8.0   #8.0 in case image size of 512, 16.0 in case image size of 1024
             rois = deepcopy(proposals)
             rois[:, 2] = rois[:, 0] + rois[:, 2]
             rois[:, 3] = rois[:, 1] + rois[:, 3]
-            rois = proposals
+            #rois = proposals
             zero_tensor = torch.zeros((400, 1))
             rois = torch.cat((zero_tensor, rois), dim=1)
             rois = torch.round(rois).to(feature_maps.device)
@@ -268,9 +269,9 @@ class Model(nn.Module):
                     output_sr = self.model_up(y[self.l1],y[self.l2]) #在超分上加attention    
                     return x,output_sr,y#(y[self.f1],y[self.f2],y[self.f3])#(y[4],y[8],y[18],y[21],y[24])#(y[7],y[15],y[-2])
                 else:
-                    return x,y#(y[self.f1],y[self.f2],y[self.f3])#(y[4],y[8],y[18],y[21],y[24])#(y[7],y[15],y[-2])
+                    return rois,y#(y[self.f1],y[self.f2],y[self.f3])#(y[4],y[8],y[18],y[21],y[24])#(y[7],y[15],y[-2])
             else:
-                return x,y#(y[17],y[20],y[23])#(y[4],y[8],y[18],y[21],y[24])#(y[7],y[15],y[-2])(y[-4],y[-3],y[-2])
+                return rois,y#(y[17],y[20],y[23])#(y[4],y[8],y[18],y[21],y[24])#(y[7],y[15],y[-2])(y[-4],y[-3],y[-2])
 
 
     def _initialize_biases(self, cf=None):  # initialize biases into Detect(), cf is class frequency

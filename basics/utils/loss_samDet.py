@@ -119,10 +119,10 @@ class ComputeLoss:
         #     breakpoint()
         #     setattr(self, k, getattr(det, k))
 
-    def __call__(self, p, targets):  # predictions, targets, model
+    def __call__(self, p, propos, targets):  # predictions, targets, model
         device = targets.device
         lcls, lbox, lobj = torch.zeros(1, device=device), torch.zeros(1, device=device), torch.zeros(1, device=device)
-        tcls, tbox, indices, anchors = self.build_targets(p, targets)  # targets
+        tcls, tbox, indices, anchors = self.build_targets(propos, targets)  # targets
 
         # Losses
         for i, pi in enumerate(p):  # layer index, layer predictions
@@ -185,6 +185,9 @@ class ComputeLoss:
         #p should be the output of SAM; we match it with the targets having shape of [batch, x, y, w, h]
         breakpoint()
         #assum p is output of SAM
+        p[:, 1:5] = xyxy2xywh(p[:, 1:5])
+        p[:, 1:5] = p[:, 1:5] / 64.0
+        breakpoint()
         preds = torch.zeros(p.shape[0])     #
         tcls, tbox, indices, anch = [], [], [], []
         tbox = []
@@ -192,8 +195,9 @@ class ComputeLoss:
         batches =[]
         proposal_idx = []
         for target in targets:
-            iou_p = bbox_iou(target, p, x1y1x2y2=False, CIoU=True)  #iou between target and proposals of same image [target[0]] as index for proposals of same image
+            iou_p = bbox_iou(target[2:6], p[:,1:5], x1y1x2y2=False, CIoU=True)  #iou between target and proposals of same image [target[0]] as index for proposals of same image
             iou_indices = iou_p.argsort(descending=True, dim=0)
+            breakpoint()
             for iou_index in iou_indices:
                 p_taken = preds[iou_index] == 0
 
