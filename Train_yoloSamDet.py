@@ -31,7 +31,7 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 # import test_up  # import test.py to get mAP after each epoch
-from basics.test import test
+from basics.test_samDet import test
 from basics.models.experimental import attempt_load
 from basics.models.SRyolo_samDet import Model #zjq
 from basics.utils.autoanchor import check_anchors
@@ -45,6 +45,7 @@ from basics.utils.loss_samDet import ComputeLoss
 from basics.utils.plots import plot_images, plot_labels, plot_results, plot_evolution,plot_lr_scheduler
 from basics.utils.torch_utils import ModelEMA, select_device, intersect_dicts, torch_distributed_zero_first, is_parallel
 from basics.utils.wandb_logging.wandb_utils import WandbLogger, check_wandb_resume
+import json
 # from optimizer import build_optimizer
 ########swin#######
 #from config import get_config
@@ -224,12 +225,12 @@ def train(hyp, opt, device, tb_writer=None):
     #if not opt.super and not opt.super_attention:
     # if not opt.data.endswith('SRvedai.yaml'):
     if opt.data.endswith('vedai.yaml') or opt.data.endswith('SRvedai.yaml'):
-        from basics.utils.datasets import create_dataloader_sr as create_dataloader
+        from basics.utils.datasets_samDet import create_dataloader_sr as create_dataloader
     else:
         from basics.utils.datasets import create_dataloader
 
     dataloader, dataset = create_dataloader(train_path, imgsz, batch_size, gs, opt,      #*changed
-                                        hyp=hyp, augment=False, cache=opt.cache_images, rect=opt.rect, rank=rank, #*changed for SAM
+                                        hyp=hyp, augment=True, cache=opt.cache_images, rect=opt.rect, rank=rank, #*changed for SAM
                                         #world_size=opt.world_size,
                                         workers=opt.workers,
                                         image_weights=opt.image_weights, quad=opt.quad, prefix=colorstr('train: '))
@@ -366,20 +367,23 @@ def train(hyp, opt, device, tb_writer=None):
         if rank != -1:
             dataloader.sampler.set_epoch(epoch)
         pbar = enumerate(dataloader)
-        logger.info(('\n' + '%10s' * 8) % ('Epoch', 'gpu_mem', 'box', 'obj', 'cls', 'total', 'labels', 'img_size'))
+        logger.info(('\n' + '%10s' * 9) % ('Epoch', 'gpu_mem', 'box', 'obj', 'cls', 'total', 'labels', 'unmatch','img_size'))
         if rank in [-1, 0]:
             pbar = tqdm(pbar, total=nb)  # progress bar
         optimizer.zero_grad()
         
-        for i, (imgs, irs, targets, paths, _) in pbar:  # batch zjq  -------------------------------------------------------------
+        for i, (imgs, irs, fm, propos, targets, paths, _) in pbar:  # batch zjq  -------------------------------------------------------------
+            
             ni = i + nb * epoch  # number integrated batches (since train start)
             image = imgs.to(device, non_blocking=True).float() / 255.0  # uint8 to float32, 0-255 to 0.0-1.0
             ir_image = irs.to(device, non_blocking=True).float() / 255.0 #zjq
 
+            fm = fm.to(device)
             # if imgsz==imgsz_test*2:
             #     imgs=F.interpolate(image,size=[i//2 for i in image.size()[2:]], mode='bilinear', align_corners=True)
             #     irs=F.interpolate(ir_image,size=[i//2 for i in ir_image.size()[2:]], mode='bilinear', align_corners=True)
             #down_factor = int(imgsz/imgsz_test)
+            
             if down_factor>1:
                 imgs=F.interpolate(image,size=[i//down_factor for i in image.size()[2:]], mode='bilinear', align_corners=True)
 
@@ -389,8 +393,8 @@ def train(hyp, opt, device, tb_writer=None):
                 # pixel_std= [58.395, 57.12, 57.375]
                 # imgs = imgs.permute(0, 2, 3, 1)
                 # imgs = (imgs - torch.tensor(pixel_mean).to(device)) / torch.tensor(pixel_std).to(device)
-                imgs = imgs.squeeze(0)
-                imgs = imgs.permute(1, 2, 0)
+                #imgs = imgs.squeeze(0)
+                #imgs = imgs.permute(1, 2, 0)
 
             else:
                 imgs = image
@@ -429,11 +433,32 @@ def train(hyp, opt, device, tb_writer=None):
                 # elif not opt.super and not opt.super_attention and opt.attention:
                 #     pred, attention_mask,_ = model(imgs,irs,opt.input_mode)
                 else:
-                    propos, pred = model(imgs,irs,opt.input_mode)
+                    propos, pred = model(fm,irs,propos, opt.input_mode)     #fm
                 # t1 = time.time()
                 # print(t1-t0)
-                breakpoint()
-                loss, lbox , lobj , lcls  = compute_loss(pred, propos.to(device), targets.to(device))  # loss scaled by batch_size
+                '''
+                ***part of code used for saving feature maps and masks (outputs of sam)
+                fpath = paths[0].replace("images", "features")
+                fpath = fpath.replace(".png", ".npy")
+                
+                if not os.path.isfile(fpath):
+                    features = pred.cpu().numpy()
+                    # Save the image array
+                    np.save(fpath, features)
+                    
+
+                    npath = fpath.replace("features", "masks")
+                    npath = npath[:-7] + ".txt"
+                    key_to_remove = "segmentation"
+                    for dictionary in propos:
+                        if key_to_remove in dictionary:
+                            dictionary.pop(key_to_remove)
+
+                    with open(npath, "w") as file:
+                        json.dump(propos, file)
+                continue
+                '''
+                loss, lbox , lobj , lcls, thr_match  = compute_loss(pred, propos.to(device), targets.to(device))  # loss scaled by batch_size
                 loss_items = torch.cat((lbox, lobj, lcls, loss)).detach()
                 if opt.super: #and not opt.attention and not opt.super_attention:    
                     if opt.input_mode =='IR':
@@ -474,13 +499,14 @@ def train(hyp, opt, device, tb_writer=None):
             if rank in [-1, 0]:
                 mloss = (mloss * i + loss_items) / (i + 1)  # update mean losses
                 mem = '%.3gG' % (torch.cuda.memory_reserved() / 1E9 if torch.cuda.is_available() else 0)  # (GB)
-                s = ('%10s' * 2 + '%10.4g' * 6) % (
-                    '%g/%g' % (epoch, epochs - 1), mem, *mloss, targets.shape[0], imgs.shape[-1])
+                s = ('%10s' * 2 + '%10.4g' * 7) % (
+                    '%g/%g' % (epoch, epochs - 1), mem, *mloss, targets.shape[0], thr_match, imgs.shape[-1])
                 pbar.set_description(s)
 
                 # Plot
                 if plots and ni < 3:
                     f = save_dir / f'train_batch{ni}.jpg'  # filename
+                    #breakpoint()
                     Thread(target=plot_images, args=(imgs, targets, paths, f), daemon=True).start()
                     # if tb_writer:
                     #     tb_writer.add_image(f, result, dataformats='HWC', global_step=epoch)
@@ -626,7 +652,7 @@ if __name__ == '__main__':
     parser.add_argument('--ch_steam', type=int, default=3)
     parser.add_argument('--ch', type=int,default=128, help = '3 4 16 midfusion1:64 midfusion2,3:128 midfusion4:256')  #*changed from default to match SAM
     parser.add_argument('--input_mode', type=str,default='RGB',help ='RGB IR RGB+IR(pixel-level fusion) RGB+IR+fusion(feature-level fusion)')
-    parser.add_argument('--batch-size', type=int, default=1, help='total batch size for all GPUs')    #* default 2
+    parser.add_argument('--batch-size', type=int, default=3, help='total batch size for all GPUs')    #* default 2
     parser.add_argument('--train_img_size', type=int,default=1024, help='train image sizes,if use SR,please set 1024')
     parser.add_argument('--test_img_size', type=int, default=512, help='test image sizes')
     parser.add_argument('--hr_input', default=True,action='store_true', help='high resolution input(1024*1024)') #if use SR,please set True
@@ -639,7 +665,7 @@ if __name__ == '__main__':
     parser.add_argument('--bucket', type=str, default='', help='gsutil bucket')
     parser.add_argument('--cache-images', action='store_true', default = False, help='cache images for faster training')  #* changed
     parser.add_argument('--image-weights', action='store_true', help='use weighted image selection for training')
-    parser.add_argument('--device', default='0', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
+    parser.add_argument('--device', default='cpu', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
     parser.add_argument('--multi-scale', action='store_true', help='vary img-size +/- 50%%')
     parser.add_argument('--single-cls', action='store_true', help='train multi-class data as single-class')
     parser.add_argument('--adam', action='store_true', help='use torch.optim.Adam() optimizer')

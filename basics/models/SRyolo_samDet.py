@@ -36,10 +36,14 @@ class Detect(nn.Module):
     stride = None  # strides computed during build
     export = False  # onnx export
 
-    def __init__(self, nc=80, in_channels= 36864, representation_size=1024, anchors=(), ch=()):  # detection layer
+    def __init__(self, nc=80, in_channels= 4608, representation_size=1024, anchors=(), ch=()):  # detection layer
         super(Detect, self).__init__()
         self.nc = nc  # number of classes
         self.no = nc + 5  # number of outputs per anchor
+        self.conv1 = Conv(256, 256)
+        self.c31 = C3(256, 128, 3)
+        self.conv2 = Conv(128, 64)
+        self.c32 = C3(64, 32, 3)
  
 
         #for samDet
@@ -49,13 +53,17 @@ class Detect(nn.Module):
         self.cls_score = nn.Linear(representation_size, nc + 1)  # +1 should be added for background
         self.bbox_pred = nn.Linear(representation_size, 4) #num_classes * 4
 
-    def forward(self, x):
+    def forward(self, x, propos):
         # x = x.copy()  # for profiling
         z = []  # inference output
 
         self.training |= self.export
         
         #for samDet
+        x = self.conv1(x)
+        x = self.c31(x)
+        x = self.conv2(x)
+        x= self.c32(x)
         x = x.flatten(start_dim=1)
 
         x = F.relu(self.fc6(x))
@@ -64,9 +72,31 @@ class Detect(nn.Module):
         x = x.flatten(start_dim=1)
         scores = self.cls_score(x)
         bbox_deltas = self.bbox_pred(x)
-        z.append(scores)
         z.append(bbox_deltas)
-        return torch.cat(z, 1) if self.training else (torch.cat(z, 1), x)
+        z.append(scores)
+        x = torch.cat(z, 1)
+        bs, _ = x.shape
+        if not self.training:
+                y = x.sigmoid()
+                y = y.view(propos.shape[0], -1, self.no)
+                propos = propos.to(y.device)
+                #y[..., 0:2] = y[..., 0:2] * 2. * 512. + propos[..., 0:2]#* 2. - 0.5 + self.grid[i]) * self.stride[i]  # xy
+                #y[..., 2:4] = ((y[..., 2:4] * 2) ** 2) * 512. + propos[..., 2:4]#* 2) ** 2 * self.anchor_grid[i]
+                y[..., 0] = y[..., 0]  * (propos[..., 2] + 1e-6) + propos[..., 0]
+                y[..., 1] = y[..., 1] * (propos[..., 3] + 1e-6) + propos[..., 1]
+                y[..., 2] = torch.exp(y[..., 2]) * (propos[..., 2] + 1e-6)
+                y[..., 3] = torch.exp(y[..., 3]) * (propos[..., 3] + 1e-6)
+                # x = x.view(propos.shape[0], -1, self.no)
+                # x = x.unsqueeze(0)
+                y = y.unsqueeze(0)
+        #x = x.sigmoid()
+        x=  x.view(propos.shape[0], -1, self.no)
+        # propos = propos.to(x.device)
+
+        # x[..., 0:2] = x[..., 0:2] + (propos[..., 0:2] / 512)#* 2. - 0.5 + self.grid[i]) * self.stride[i]  # xy
+        # x[..., 2:4] = x[..., 2:4] + (propos[..., 2:4] / 512)#* 2) ** 2 * self.anchor_grid[i]
+        x = x.unsqueeze(0)
+        return x if self.training else (y, x) #(torch.cat(z, 1), x)
 
     @staticmethod
     def _make_grid(nx=20, ny=20):
@@ -97,20 +127,22 @@ class Model(nn.Module):
         if input_mode == 'RGB+IR+fusion':
             self.steam, _ = parse_model(deepcopy(self.yaml),'steam', ch=[ch_steam],config=config)  # zjq model, savelist
         #self.model, self.save = parse_model(deepcopy(self.yaml),'backbone+head', ch=[ch],config=config)  # model, savelist   #* changed removed
+        '''following part was for preparing the dataset
         model = "vit_b"
         weights_filepath = "/home/bbahaduri/sryolo/weights/sam_vit_b_01ec64.pth"
         model = sam_model_registry[model](checkpoint=weights_filepath)
         self.sam = model
         self.mask_generator = SamAutomaticMaskGenerator(
             model=self.sam,
-            points_per_side=128,
+            points_per_side=64,
+            points_per_batch= 640,
             pred_iou_thresh=0.86,
             stability_score_thresh=0.92,
             crop_n_layers=0,
             crop_n_points_downscale_factor=1,
             #min_mask_region_area=100,  # Requires open-cv to run post-processing
             )
-
+        '''
         self.detect = Detect(nc=8)
         
         # self.f1=self.yaml['f1']  #蒸馏特征层层数
@@ -135,7 +167,7 @@ class Model(nn.Module):
         logger.info('')
         
     
-    def forward(self, x, ir=torch.randn(1,3,512,512), input_mode='RGB+IR', augment=False, profile=False):
+    def forward(self, x, ir=torch.randn(1,3,512,512), propos=None, input_mode='RGB+IR', augment=False, profile=False):
 
         # input_mode = 'RGB+IR' #IRRGB
         if input_mode=='RGB':
@@ -160,7 +192,7 @@ class Model(nn.Module):
                     steam = iri#steam = iri[:,0:1,:,:]
                 if input_mode == 'RGB+IR+MF':
                     steam = [x,ir[:,0:1,:,:]] #[:,0:1,:,:]
-                yi = self.forward_once(steam,'yolo')[0]  # forward
+                yi = self.forward_once(steam, propos, 'yolo')[0]  # forward
                 # yi = self.forward_once(xi)[0]  # forward
                 # cv2.imwrite('img%g.jpg' % s, 255 * xi[0].numpy().transpose((1, 2, 0))[:, :, ::-1])  # save
                 yi[..., :4] /= si  # de-scale
@@ -192,16 +224,17 @@ class Model(nn.Module):
                     y,output_sr,features = self.forward_once(steam,'yolo', profile) #zjq
                     return y,output_sr,features
                 else:
-                    y,features = self.forward_once(steam,'yolo', profile) #zjq
+                    y,features = self.forward_once(steam, propos, 'yolo', profile) #zjq
                     return y,features
             else:
-                y,features = self.forward_once(steam,'yolo', profile) #zjq
-                return y[0],y[1],features
+                y,features = self.forward_once(steam, propos, 'yolo', profile) #zjq
+
+                return y,features[0], features[1]  #y[0],y[1]
 
 
 
     
-    def forward_once(self, x, string, profile=False):
+    def forward_once(self, x, propos, string, profile=False):
         y, dt = [], []  # outputs
         if string == 'steam':
             for m in self.steam:
@@ -226,50 +259,45 @@ class Model(nn.Module):
             # feature_maps = self.sam.image_encoder(x)
             # breakpoint()
             # point_grids = build_all_layer_point_grids(64, 0, 1)
-            breakpoint()
+            '''
+            *** for preparing dataset:
             _outputs, feature_maps = self.mask_generator.generate(x)
-            breakpoint()
-            max_num_boxes = 400
-            if len(_outputs) > 400:
-                sorted_list = sorted(_outputs, key=lambda x: x['predicted_iou'], reverse=True)
-                filtered_boxes = sorted_list[:max_num_boxes]
-                _outputs = [d['bbox'] for d in filtered_boxes]
-            elif len(_outputs) < 400:
-                _outputs = [d['bbox'] for d in _outputs]
-                _outputs = _outputs + [[0, 0, 0, 0]] * (max_num_boxes - len(_outputs))
-            else:
-                _outputs = [d['bbox'] for d in _outputs]
-            #TO DO: filter the outputs and take the boxes of 300 or 400
-            breakpoint()
-            proposals = torch.tensor(_outputs) / 8.0   #8.0 in case image size of 512, 16.0 in case image size of 1024
-            rois = deepcopy(proposals)
-            rois[:, 2] = rois[:, 0] + rois[:, 2]
-            rois[:, 3] = rois[:, 1] + rois[:, 3]
-            #rois = proposals
-            zero_tensor = torch.zeros((400, 1))
-            rois = torch.cat((zero_tensor, rois), dim=1)
-            rois = torch.round(rois).to(feature_maps.device)
-            breakpoint()
+            '''
+            _outputs = propos
+            feature_maps = x
+            rois_pool, rois, zero_mask, proposals = prepare(_outputs)
+            rois_pool = rois_pool.to(feature_maps.device)
+            zero_mask = zero_mask.to(feature_maps.device)
+            rois = rois.to(feature_maps.device)
             output_size = (12, 12)
+            feature_maps = feature_maps.type(torch.float32)
+            rois_pool = rois_pool.type(torch.float32)
+            pooled_features = ops.roi_pool(feature_maps, rois_pool, output_size)
+            pooled_features = pooled_features.type(torch.float32)
+            zero_mask = zero_mask[:, None, None, None]
+            pooled_features = pooled_features * (~zero_mask).int()
 
-            pooled_features = ops.roi_pool(feature_maps, rois, output_size)
-            breakpoint()
-            y = self.detect(pooled_features)
-            breakpoint()
+            y = self.detect(pooled_features, proposals)
+            # if self.training:
+            #     y = y.view(batch_size, -1, 13)
+            #     y = y.unsqueeze(0)
+
+            #y = y.unsqueeze(0)
+
             # for feature in y[:-1]:
             #     print((torch.numel(feature)-torch.count_nonzero(feature))/torch.numel(feature))
-
             
             
+            
 
-
+            feature_maps = feature_maps.squeeze(0)
             self.training |= self.export
             if self.training==True:
                 if self.sr:
                     output_sr = self.model_up(y[self.l1],y[self.l2]) #在超分上加attention    
                     return x,output_sr,y#(y[self.f1],y[self.f2],y[self.f3])#(y[4],y[8],y[18],y[21],y[24])#(y[7],y[15],y[-2])
                 else:
-                    return rois,y#(y[self.f1],y[self.f2],y[self.f3])#(y[4],y[8],y[18],y[21],y[24])#(y[7],y[15],y[-2])
+                    return rois,y   #(y[self.f1],y[self.f2],y[self.f3])#(y[4],y[8],y[18],y[21],y[24])#(y[7],y[15],y[-2])
             else:
                 return rois,y#(y[17],y[20],y[23])#(y[4],y[8],y[18],y[21],y[24])#(y[7],y[15],y[-2])(y[-4],y[-3],y[-2])
 
@@ -444,3 +472,52 @@ def parse_model(d, string, ch,config):  # model_dict, input_channels(3)
     # print("Run 'tensorboard --logdir=models/runs' to view tensorboard at http://localhost:6006/")
     # tb_writer.add_graph(model.model, img)  # add model to tensorboard
     # tb_writer.add_image('test', img[0], dataformats='CWH')  # add model to tensorboard
+
+
+def prepare(_outputs):
+    max_num_boxes = 400
+    if isinstance(_outputs, tuple):
+        _outputs = list(_outputs)
+    for i  in range(len(_outputs)):
+
+        if len(_outputs[i]) < 400:
+            add_tensor = torch.zeros(max_num_boxes - len(_outputs[i]), 4)
+            _outputs[i] = torch.cat((_outputs[i], add_tensor), dim=0)
+
+            #_outputs[i] = _outputs[i] + [[0, 0, 0, 0]] * (max_num_boxes - len(_outputs[i]))
+
+    #TO DO: filter the outputs and take the boxes of 300 or 400
+
+    proposals = torch.stack(_outputs)
+
+    rois = deepcopy(proposals)
+    rois = rois * 64.0                         #changing from a base of 1 to base of 64 to match the feature maps
+    rois[:, :, 0] = rois[:, :, 0] - rois[:, :, 2] / 2
+    rois[:, :, 1] = rois[:, :, 1] - rois[:, :, 3] / 2
+    rois[:, :, 2] = rois[:, :, 0] + rois[:, :, 2] 
+    rois[:, :, 3] = rois[:, :, 1] + rois[:, :, 3] 
+
+    proposals = proposals * 512             #changing to base 512
+
+    #changing proposals(base 512) from xywh(topleft) to xywh(center)
+    ##proposals[:, :, 0] = proposals[:, :, 0] + (proposals[:, :, 2] / 2)
+    ##proposals[:, :, 1] = proposals[:, :, 1] + (proposals[:, :, 3] / 2)
+    # proposals[:, :, 2] = proposals[:, :, 0] + proposals[:, :, 2]
+    # proposals[:, :, 3] = proposals[:, :, 1] + proposals[:, :, 3]
+    #rois = proposals
+    # zero_tensor = torch.zeros((400, 1))
+    # zero_tensor = zero_tensor.unsqueeze(0)
+    # zero_tensor = zero_tensor.repeat(rois.shape[0], 1, 1)
+    batch_size = rois.shape[0]
+    batch_indices = torch.arange(rois.shape[0]).unsqueeze(1).unsqueeze(2).expand(rois.shape[0], 400, 1)
+
+    rois = torch.cat((batch_indices, rois), dim=2)
+    
+    #rois = torch.ceil(rois)
+    rois_pool = rois.view(-1, 5)
+    output_size = (12, 12)
+    #rois_pool = rois_pool.to(feature_maps.dtype)
+    zero_mask = torch.all(rois_pool[:, 1:5] == 0, dim=1)
+
+    return rois_pool, rois, zero_mask, proposals
+    #rois_pool = rois_pool.to(feature_maps.dtype)
