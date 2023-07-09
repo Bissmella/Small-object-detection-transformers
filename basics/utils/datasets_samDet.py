@@ -854,6 +854,7 @@ class LoadImagesAndLabels_sr(Dataset):  # for training/testing
                 labels[:, 2] = ratio[1] * h * (x[:, 2] - x[:, 4] / 2) + pad[1]  # pad height
                 labels[:, 3] = ratio[0] * w * (x[:, 1] + x[:, 3] / 2) + pad[0]
                 labels[:, 4] = ratio[1] * h * (x[:, 2] + x[:, 4] / 2) + pad[1]
+
             proposals = np.array(proposals)
             if len(proposals) > 0:
                 #propos[:, 0] = propos[:, 0] - propos[:, 2] /2
@@ -864,16 +865,16 @@ class LoadImagesAndLabels_sr(Dataset):  # for training/testing
                 propos[:, 2] = propos[:, 0] + propos[:, 2]
                 propos[:, 3] = propos[:, 1] + propos[:, 3]
 
-        # if self.augment:
-            # Augment imagespace
+        if self.augment:
+            #Augment imagespace
             #breakpoint()
-            # if not mosaic:
-            #     img, ir, fm, propos, labels = random_perspective(img, ir, fm, propos, labels,
-            #                                      degrees=hyp['degrees'],
-            #                                      translate=hyp['translate'],
-            #                                      scale=hyp['scale'],
-            #                                      shear=hyp['shear'],
-            #                                      perspective=hyp['perspective'])
+            if not mosaic:
+                img, ir, fm, propos, labels = random_perspective(img, ir, fm, propos, labels,
+                                                 degrees=hyp['degrees'],
+                                                 translate=hyp['translate'],
+                                                 scale=hyp['scale'],
+                                                 shear=hyp['shear'],
+                                                 perspective=hyp['perspective'])
 
             # Augment colorspace
             #augment_hsv(img, hgain=hyp['hsv_h'], sgain=hyp['hsv_s'], vgain=hyp['hsv_v'])
@@ -1243,9 +1244,15 @@ def random_perspective(img, ir, fm, propos, targets=(), degrees=10, translate=.1
     C[0, 2] = -img.shape[1] / 2  # x translation (pixels)
     C[1, 2] = -img.shape[0] / 2  # y translation (pixels)
 
+    #for feature maps
     Cm = np.eye(3)
     Cm[0, 2] = -fm.shape[1] / 2
     Cm[1, 2] = -fm.shape[0] / 2
+
+    #for propos
+    Cp = np.eye(3)
+    Cp[0, 2] = -512 / 2
+    Cp[1, 2] = -512 / 2
 
     # Perspective
     P = np.eye(3)
@@ -1270,6 +1277,11 @@ def random_perspective(img, ir, fm, propos, targets=(), degrees=10, translate=.1
     T[0, 2] = random.uniform(0.5 - translate, 0.5 + translate) * width  # x translation (pixels)
     T[1, 2] = random.uniform(0.5 - translate, 0.5 + translate) * height  # y translation (pixels)
 
+    #Translation for propos
+    Tp = np.eye(3)
+    Tp[0, 2] = T[0,2]/2#random.uniform(0.5 - translate, 0.5 + translate) * 512  # x translation (pixels)
+    Tp[1, 2] = T[1,2]/2#random.uniform(0.5 - translate, 0.5 + translate) * 512  # y translation (pixels)
+
     # Combined rotation matrix
     M = T @ S @ R @ P @ C  # order of operations (right to left) is IMPORTANT
     if (border[0] != 0) or (border[1] != 0) or (M != np.eye(3)).any():  # image changed
@@ -1282,8 +1294,9 @@ def random_perspective(img, ir, fm, propos, targets=(), degrees=10, translate=.1
 
     # translation of feature maps
     Tm = np.eye(3)
-    Tm[0, 2] = random.uniform(0.5 - translate, 0.5 + translate) * fm_width  # x translation (pixels)
-    Tm[1, 2] = random.uniform(0.5 - translate, 0.5 + translate) * fm_height  # y translation (pixels)
+
+    Tm[0, 2] = T[0,2]/16#random.uniform(0.5 - translate, 0.5 + translate) * fm_width  # x translation (pixels)
+    Tm[1, 2] = T[1,2]/16#random.uniform(0.5 - translate, 0.5 + translate) * fm_height  # y translation (pixels)
 
     Mm = Tm @ S @ R @ P @ Cm  # order of operations (right to left) is IMPORTANT
     if (border[0] != 0) or (border[1] != 0) or (Mm != np.eye(3)).any():  # image changed
@@ -1335,12 +1348,15 @@ def random_perspective(img, ir, fm, propos, targets=(), degrees=10, translate=.1
         targets = targets[i]
         targets[:, 1:5] = xy[i]
 
+    #augmentation for proposals
+    Mp = Tp @ S @ R @ P @ Cp
+
     n = len(propos)
     if n:
         # warp points
         xy = np.ones((n * 4, 3))
         xy[:, :2] = propos[:, [0, 1, 2, 3, 0, 3, 2, 1]].reshape(n * 4, 2)  # x1y1, x2y2, x1y2, x2y1
-        xy = xy @ Mm.T  # transform
+        xy = xy @ Mp.T  # transform
         if perspective:
             xy = (xy[:, :2] / xy[:, 2:3]).reshape(n, 8)  # rescale
         else:  # affine

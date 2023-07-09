@@ -19,11 +19,12 @@ from ..utils.autoanchor import check_anchor_order
 from ..utils.general import make_divisible, check_file, set_logging, xywh2xyxy
 from ..utils.torch_utils import time_synchronized, fuse_conv_and_bn, model_info, scale_img, initialize_weights, \
     select_device, copy_attr
-from codes.meta_SAM.segment_anything.segment_anything.build_sam import sam_model_registry
-from codes.meta_SAM.segment_anything.segment_anything.automatic_mask_generator import SamAutomaticMaskGenerator
+#from codes.meta_SAM.segment_anything.segment_anything.build_sam import sam_model_registry
+#from codes.meta_SAM.segment_anything.segment_anything.automatic_mask_generator import SamAutomaticMaskGenerator
 import torchvision.ops as ops
 import scipy.io as sio
 import numpy
+from torch.nn.utils.rnn import pad_sequence
 # from models import build_model
 try:
     import thop  # for FLOPS computation
@@ -40,10 +41,10 @@ class Detect(nn.Module):
         super(Detect, self).__init__()
         self.nc = nc  # number of classes
         self.no = nc + 5  # number of outputs per anchor
-        self.conv1 = Conv(256, 256)
-        self.c31 = C3(256, 128, 3)
-        self.conv2 = Conv(128, 64)
-        self.c32 = C3(64, 32, 3)
+        # self.conv1 = Conv(256, 256)
+        # self.c31 = C3(256, 128, 3)
+        # self.conv2 = Conv(128, 64)
+        # self.c32 = C3(64, 32, 3)
  
 
         #for samDet
@@ -60,10 +61,10 @@ class Detect(nn.Module):
         self.training |= self.export
         
         #for samDet
-        x = self.conv1(x)
-        x = self.c31(x)
-        x = self.conv2(x)
-        x= self.c32(x)
+        # x = self.conv1(x)
+        # x = self.c31(x)
+        # x = self.conv2(x)
+        # x= self.c32(x)
         x = x.flatten(start_dim=1)
 
         x = F.relu(self.fc6(x))
@@ -78,23 +79,23 @@ class Detect(nn.Module):
         bs, _ = x.shape
         if not self.training:
                 y = x.sigmoid()
-                y = y.view(propos.shape[0], -1, self.no)
+                #y = y.view(propos.shape[0], -1, self.no)
                 propos = propos.to(y.device)
                 #y[..., 0:2] = y[..., 0:2] * 2. * 512. + propos[..., 0:2]#* 2. - 0.5 + self.grid[i]) * self.stride[i]  # xy
                 #y[..., 2:4] = ((y[..., 2:4] * 2) ** 2) * 512. + propos[..., 2:4]#* 2) ** 2 * self.anchor_grid[i]
-                y[..., 0] = y[..., 0]  * (propos[..., 2] + 1e-6) + propos[..., 0]
-                y[..., 1] = y[..., 1] * (propos[..., 3] + 1e-6) + propos[..., 1]
-                y[..., 2] = torch.exp(y[..., 2]) * (propos[..., 2] + 1e-6)
-                y[..., 3] = torch.exp(y[..., 3]) * (propos[..., 3] + 1e-6)
+                
+                y[..., 0] = (y[..., 0]  * (propos[..., 2] + 1e-6)) + (propos[..., 0] * 1024)
+                y[..., 1] = (y[..., 1] * (propos[..., 3] + 1e-6)) + (propos[..., 1] * 1024)
+                y[..., 2] = torch.exp(y[..., 2]) * (propos[..., 2] + 1e-6) * 1024
+                y[..., 3] = torch.exp(y[..., 3]) * (propos[..., 3] + 1e-6) * 1024
                 # x = x.view(propos.shape[0], -1, self.no)
                 # x = x.unsqueeze(0)
-                y = y.unsqueeze(0)
-        #x = x.sigmoid()
-        x=  x.view(propos.shape[0], -1, self.no)
+                #y = y.unsqueeze(0)
+
+        #x=  x.view(propos.shape[0], -1, self.no)
         # propos = propos.to(x.device)
 
-        # x[..., 0:2] = x[..., 0:2] + (propos[..., 0:2] / 512)#* 2. - 0.5 + self.grid[i]) * self.stride[i]  # xy
-        # x[..., 2:4] = x[..., 2:4] + (propos[..., 2:4] / 512)#* 2) ** 2 * self.anchor_grid[i]
+
         x = x.unsqueeze(0)
         return x if self.training else (y, x) #(torch.cat(z, 1), x)
 
@@ -143,6 +144,11 @@ class Model(nn.Module):
             #min_mask_region_area=100,  # Requires open-cv to run post-processing
             )
         '''
+        self.conv1 = Conv(256, 256)
+        self.c31 = C3(256, 128, 3)
+        self.conv2 = Conv(128, 64)
+        self.c32 = C3(64, 32, 3)
+        self.pooler = ops.RoIPool((12, 12), 1.0)
         self.detect = Detect(nc=8)
         
         # self.f1=self.yaml['f1']  #蒸馏特征层层数
@@ -264,33 +270,37 @@ class Model(nn.Module):
             _outputs, feature_maps = self.mask_generator.generate(x)
             '''
             _outputs = propos
-            feature_maps = x
-            rois_pool, rois, zero_mask, proposals = prepare(_outputs)
-            rois_pool = rois_pool.to(feature_maps.device)
-            zero_mask = zero_mask.to(feature_maps.device)
-            rois = rois.to(feature_maps.device)
-            output_size = (12, 12)
-            feature_maps = feature_maps.type(torch.float32)
-            rois_pool = rois_pool.type(torch.float32)
-            pooled_features = ops.roi_pool(feature_maps, rois_pool, output_size)
-            pooled_features = pooled_features.type(torch.float32)
-            zero_mask = zero_mask[:, None, None, None]
-            pooled_features = pooled_features * (~zero_mask).int()
+            #feature_maps = x
+            x = self.conv1(x)
+            x = self.c31(x)
+            x = self.conv2(x)
+            x= self.c32(x)
+            
 
-            y = self.detect(pooled_features, proposals)
-            # if self.training:
-            #     y = y.view(batch_size, -1, 13)
-            #     y = y.unsqueeze(0)
+            rois, proposals, batch_lenghts = prepare(_outputs, x.device)
 
-            #y = y.unsqueeze(0)
+            x = self.pooler(x, rois)
 
-            # for feature in y[:-1]:
-            #     print((torch.numel(feature)-torch.count_nonzero(feature))/torch.numel(feature))
+            # rois_pool, rois, zero_mask, proposals = prepare(_outputs)
+            # rois_pool = rois_pool.to(x.device)
+            # zero_mask = zero_mask.to(x.device)
+            # rois = rois.to(x.device)
+            # output_size = (12, 12)
+
+            # rois_pool = rois_pool.type(torch.float32)
+            # pooled_features = ops.roi_pool(x, rois_pool, output_size)
+
+            # pooled_features = pooled_features.type(torch.float32)
+            # zero_mask = zero_mask[:, None, None, None]
+            # pooled_features = pooled_features * (~zero_mask).int()
+
+            y = self.detect(x, proposals)
+
             
             
             
 
-            feature_maps = feature_maps.squeeze(0)
+            #feature_maps = feature_maps.squeeze(0)
             self.training |= self.export
             if self.training==True:
                 if self.sr:
@@ -299,6 +309,11 @@ class Model(nn.Module):
                 else:
                     return rois,y   #(y[self.f1],y[self.f2],y[self.f3])#(y[4],y[8],y[18],y[21],y[24])#(y[7],y[15],y[-2])
             else:
+                y = list(y)
+                y[0] = torch.split(y[0], batch_lenghts)
+                y[0] = pad_sequence(y[0], batch_first=True, padding_value=0)
+                y = tuple(y)
+                breakpoint()
                 return rois,y#(y[17],y[20],y[23])#(y[4],y[8],y[18],y[21],y[24])#(y[7],y[15],y[-2])(y[-4],y[-3],y[-2])
 
 
@@ -474,50 +489,64 @@ def parse_model(d, string, ch,config):  # model_dict, input_channels(3)
     # tb_writer.add_image('test', img[0], dataformats='CWH')  # add model to tensorboard
 
 
-def prepare(_outputs):
+def prepare(_outputs, device):
     max_num_boxes = 400
     if isinstance(_outputs, tuple):
         _outputs = list(_outputs)
-    for i  in range(len(_outputs)):
 
-        if len(_outputs[i]) < 400:
-            add_tensor = torch.zeros(max_num_boxes - len(_outputs[i]), 4)
-            _outputs[i] = torch.cat((_outputs[i], add_tensor), dim=0)
+    #new here
+    proposals = deepcopy(_outputs)
 
-            #_outputs[i] = _outputs[i] + [[0, 0, 0, 0]] * (max_num_boxes - len(_outputs[i]))
+    for i, rois in enumerate(_outputs):
+        rois = rois * 64.0                         #changing from a base of 1 to base of 64 to match the feature maps
+        rois[:, 0] = rois[:, 0] - rois[:, 2] / 2
+        rois[:, 1] = rois[:, 1] - rois[:, 3] / 2
+        rois[:, 2] = rois[:, 0] + rois[:, 2] 
+        rois[:, 3] = rois[:, 1] + rois[:, 3] 
+        rois = rois.to(device)
+        _outputs[i] = rois
 
-    #TO DO: filter the outputs and take the boxes of 300 or 400
 
-    proposals = torch.stack(_outputs)
-
-    rois = deepcopy(proposals)
-    rois = rois * 64.0                         #changing from a base of 1 to base of 64 to match the feature maps
-    rois[:, :, 0] = rois[:, :, 0] - rois[:, :, 2] / 2
-    rois[:, :, 1] = rois[:, :, 1] - rois[:, :, 3] / 2
-    rois[:, :, 2] = rois[:, :, 0] + rois[:, :, 2] 
-    rois[:, :, 3] = rois[:, :, 1] + rois[:, :, 3] 
-
-    proposals = proposals * 512             #changing to base 512
-
-    #changing proposals(base 512) from xywh(topleft) to xywh(center)
-    ##proposals[:, :, 0] = proposals[:, :, 0] + (proposals[:, :, 2] / 2)
-    ##proposals[:, :, 1] = proposals[:, :, 1] + (proposals[:, :, 3] / 2)
-    # proposals[:, :, 2] = proposals[:, :, 0] + proposals[:, :, 2]
-    # proposals[:, :, 3] = proposals[:, :, 1] + proposals[:, :, 3]
-    #rois = proposals
-    # zero_tensor = torch.zeros((400, 1))
-    # zero_tensor = zero_tensor.unsqueeze(0)
-    # zero_tensor = zero_tensor.repeat(rois.shape[0], 1, 1)
-    batch_size = rois.shape[0]
-    batch_indices = torch.arange(rois.shape[0]).unsqueeze(1).unsqueeze(2).expand(rois.shape[0], 400, 1)
-
-    rois = torch.cat((batch_indices, rois), dim=2)
+    for i, propos in enumerate(proposals):
+        propos = propos.to(device)
+        proposals[i] = propos
     
-    #rois = torch.ceil(rois)
-    rois_pool = rois.view(-1, 5)
-    output_size = (12, 12)
-    #rois_pool = rois_pool.to(feature_maps.dtype)
-    zero_mask = torch.all(rois_pool[:, 1:5] == 0, dim=1)
+    
+    batch_lenghts = [propos.shape[0] for propos in proposals]
+    proposals = torch.cat(proposals)
+    # for i  in range(len(_outputs)):
 
-    return rois_pool, rois, zero_mask, proposals
-    #rois_pool = rois_pool.to(feature_maps.dtype)
+    #     if len(_outputs[i]) < 400:
+    #         add_tensor = torch.zeros(max_num_boxes - len(_outputs[i]), 4)
+    #         _outputs[i] = torch.cat((_outputs[i], add_tensor), dim=0)
+
+            
+
+
+
+#   proposals = torch.stack(_outputs)
+
+#     rois = deepcopy(proposals)
+#     rois = rois * 64.0                         #changing from a base of 1 to base of 64 to match the feature maps
+#     rois[:, :, 0] = rois[:, :, 0] - rois[:, :, 2] / 2
+#     rois[:, :, 1] = rois[:, :, 1] - rois[:, :, 3] / 2
+#     rois[:, :, 2] = rois[:, :, 0] + rois[:, :, 2] 
+#     rois[:, :, 3] = rois[:, :, 1] + rois[:, :, 3]     
+  
+
+ 
+    # batch_size = rois.shape[0]
+    # batch_indices = torch.arange(rois.shape[0]).unsqueeze(1).unsqueeze(2).expand(rois.shape[0], 400, 1)
+
+    # rois = torch.cat((batch_indices, rois), dim=2)
+    
+
+    # rois_pool = deepcopy(rois)
+    # rois_pool = rois_pool.view(-1, 5)
+    # output_size = (12, 12)
+
+    # zero_mask = torch.all(rois_pool[:, 1:5] == 0, dim=1)
+    # rois_pool[:, 1:5] = torch.ceil(rois_pool[:, 1:5])
+    # return rois_pool, rois, zero_mask, proposals
+
+    return _outputs, proposals, batch_lenghts

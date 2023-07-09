@@ -122,38 +122,41 @@ class ComputeLoss:
     def __call__(self, p, propos, targets):  # predictions, targets, model
         device = targets.device
         lcls, lbox, lobj = torch.zeros(1, device=device), torch.zeros(1, device=device), torch.zeros(1, device=device)
-        tcls, tbox, indices, proposals, n_indices, thr_match = self.build_targets(propos, targets)  # targets
+        tcls, tbox, indices, proposals, n_indices, thr_match = self.build_targets(propos, targets, p.shape[1])  # targets
 
         # Losses
         
         for i, pi in enumerate(p):  # layer index, layer predictions
-            b, a = indices[i]  # image, proposal   --image, anchor, gridy, gridx
-            nb, na = n_indices[i]
+            b = indices[i]  # #, a    image, proposal   --image, anchor, gridy, gridx
+
+            obj = n_indices[..., 0] == 1  # in paper this is Iobj_i
+            noobj = n_indices[..., 0] == 0  # in paper this is Inoobj_i
+
 
             tobj = torch.zeros_like(pi[..., 0], device=device)  # target obj
 
             n = b.shape[0]  # number of targets
             if n:
-                ps = pi[b, a]  # prediction subset corresponding to targets
+                ps = pi[b]  # prediction subset corresponding to targets
 
                 # Regression
 
                 #pxy = ps[:, :2] * 2. + proposals[b, a, 1:3] #.sigmoid()   #*changed * 2. - 0.5 #取出每幅图像包含目标的网格和对应anchor的预测结果，对目标位置的预测值进行sigmoid运算后乘以2再减去0.5得到box中心点的位置
-                predicted_boxes = torch.zeros_like(proposals[b, a, 1:])
-                ps[:, :4] = ps[:, :4].sigmoid()
-                predicted_boxes[:, 0] = ps[:, 0] * (proposals[b, a, 3] + 1e-6) + proposals[b, a, 1]
-                predicted_boxes[:, 1] = ps[:, 1] * (proposals[b, a, 4]+ 1e-6) + proposals[b, a, 2]
+                predicted_boxes = torch.zeros_like(proposals[b, 0:])
+                #ps[:, :4] = ps[:, :4].sigmoid()
+                predicted_boxes[:, 0] = ps[:, 0].sigmoid() * (proposals[b, 2] + 1e-6) + proposals[b, 0]
+                predicted_boxes[:, 1] = ps[:, 1].sigmoid() * (proposals[b, 3]+ 1e-6) + proposals[b, 1]
                 #pwh = ps[:, 2:4].sigmoid()   + proposals[b, a, 3:5]  #.sigmoid()     #*changed (ps[:, 2:4].sigmoid() * 2) ** 2 * anchors[i] #对目标宽高预测值进行sigmoid运算后乘以2再平方再乘以对应的anchor的宽高得到预测框的宽高值
-                predicted_boxes[:, 2] = torch.exp(ps[:, 2]) * (proposals[b, a, 3] + 1e-6)
-                predicted_boxes[:, 3] = torch.exp(ps[:, 3]) * (proposals[b, a, 4] + 1e-6)
+                predicted_boxes[:, 2] = torch.exp(ps[:, 2]) * (proposals[b, 2] + 1e-6)
+                predicted_boxes[:, 3] = torch.exp(ps[:, 3]) * (proposals[b, 3] + 1e-6)
                 #pbox = torch.cat((pxy, pwh), 1)  # predicted box
                 iou = bbox_iou(predicted_boxes.T, tbox[i], x1y1x2y2=False, CIoU=True)  # iou(prediction, target) .T 矩阵转置
-
+                
                 lbox += (1.0 - iou).mean()  # iou loss   F.mse_loss(pbox, tbox[i])#
 
                 # Objectness
 
-                tobj[b, a] = (1.0 - self.gr) + self.gr * iou.detach().clamp(0).type(tobj.dtype)  # iou ratio
+                tobj[b] = (1.0 - self.gr) + self.gr * iou.detach().clamp(0).type(tobj.dtype)  # iou ratio
                 
                 # Classification
                 if self.nc > 1:  # cls loss (only if multiple classes)
@@ -166,8 +169,8 @@ class ComputeLoss:
                 # with open('targets.txt', 'a') as file:
                 #     [file.write('%11.5g ' * 4 % tuple(x) + '\n') for x in torch.cat((txy[i], twh[i]), 1)]
 
-            obji = self.BCEobj(ps[..., 4], tobj[b, a])
-            #obji += self.BCEobj(pi[nb, na, 4], tobj[nb, na])
+            obji = self.BCEobj(ps[..., 4], tobj[b])
+            obji += self.BCEobj(pi[..., 4][noobj], tobj[noobj])    #nb, na
             lobj += obji * self.balance[i]  # obj loss
 
             if self.autobalance:
@@ -183,7 +186,7 @@ class ComputeLoss:
         loss = lbox + lobj + lcls
         return loss * bs, lbox , lobj , lcls, thr_match #loss * bs, torch.cat((lbox, lobj, lcls, loss)).detach() # .detach_() 和 .data用于切断反向传播
 
-    def build_targets(self, p, targets):
+    def build_targets(self, p, targets, batch_size):
         # Build targets for compute_loss(), input targets(image,class,x,y,w,h)
         '''
         changed from original build_targets
@@ -200,71 +203,103 @@ class ComputeLoss:
         #p should be the output of SAM; we match it with the targets having shape of [batch, x, y, w, h]
         #assum p is output of SAM
         thr_match = 0
-        p = p.view(-1, 5)  #below xyxy2xywh requires n x 4 shape not n x n x 4
-        p[:, 1:5] = xyxy2xywh(p[:, 1:5])
-        p = p.view(-1, 400, 5)
+        for i, pro in enumerate(p):
+            pro[:, 0:4] = xyxy2xywh(pro[:, 0:4])
+            pro[:, 0:4] = pro[:, 0:4] /64.0
+            p[i] = pro
+        # p = p.view(-1, 5)  #below xyxy2xywh requires n x 4 shape not n x n x 4
+        # p[:, 1:5] = xyxy2xywh(p[:, 1:5])
+        # p = p.view(-1, 400, 5)
 
-        p[:,:, 1:5] = p[:, :, 1:5] / 64.0
+        # p[:,:, 1:5] = p[:, :, 1:5] / 64.0
 
-        preds = torch.zeros(p.shape[0], p.shape[1]).to(targets.device)     #track keepr of which proposal has been assigned or not
+        #TODO batch_size to be passed to this func
+        objectness = torch.zeros(batch_size)
+       
         tars = torch.zeros(targets.shape[0]).to(targets.device)  #track keepr of which target has proposal or not
         tcls, tbox, indices, anch = [], [], [], []
         n_indices =[]
-        tobj = torch.zeros_like(p[..., 0], device=targets.device)
+
         tbox = []
         tcls = []  #8 is the number of classes
         batches =[]
         proposal_idx = []
         n_batches = []
         n_proposalIdx = []
+        indx_tracker = 0 
+        #list to track which batche's targets count has been added to indx_tracker
+        batch_list = []
+        if int(targets[0, 0]) != 0:
+            for i in range(int(targets[0, 0])):
+                indx_tracker += p[i].shape[0]
+                batch_list.append(i)
         for i, target in enumerate(targets):
-            iou_p = bbox_iou(target[2:6], p[int(target[0]),:,1:5], x1y1x2y2=False, CIoU=True)  #iou between target and proposals of same image [target[0]] as index for proposals of same image
+            if batch_list[-1] -1 != int(target[0]):
+                for i in range( batch_list[-1] -1, int(target[0])):
+                    indx_tracker += p[i].shape[0]
+                    batch_list.append(i)
+            preds = torch.zeros(p[int(target[0])].shape[0]).to(targets.device)   #keep track of which proposal is assigned or not
+            iou_p = bbox_iou(target[2:6], p[int(target[0])][:,0:4], x1y1x2y2=False, CIoU=True)  #iou between target and proposals of same image [target[0]] as index for proposals of same image
             iou_indices = iou_p.argsort(descending=True, dim=0)
-
             for iou_index in iou_indices:
-                p_taken = preds[int(target[0]), iou_index] == 1
+                p_taken = preds[iou_index] == 1
                 tar_taken = tars[i] == 1
                 if not p_taken and not tar_taken:
-                    preds[int(target[0]), iou_index] = 1    #proposal taken
-                    tars[i] = 1             #target has a proposal
+                    #preds[int(target[0]), iou_index] = 1    #proposal taken
+                    #tars[i] = 1             #target has a proposal
                     #breakpoint()
-                    if iou_p[iou_index] > 0.4:
+                    if iou_p[iou_index] > 0.5:
                         thr_match = thr_match + 1
                     #tbox[iou_index][0] = 1  #objectness
-                        preds[int(target[0]), iou_index] = 1    #proposal taken
+                        preds[iou_index] = 1    #proposal taken
                         tars[i] = 1             #target has a proposal
                         xy = [target[2] , target[3]]  #  - p[int(target[0]), iou_index, 1]   - p[int(target[0]), iou_index, 2]  - p[1]difference of ground-truth and proposal xy
                         wh = [target[4], target[5]] #   - p[int(target[0]), iou_index, 3] - p[int(target[0]), iou_index, 4] - p[2] - p[3] difference of ground-truth and porposal wh
-                        tobj[int(target[0]), iou_index] = 1.#iou_p[iou_index] + 0.1    # +0.12 to make 0.4 and 0.38 counted as well
+                        if indx_tracker + iou_index>batch_size:
+                            breakpoint()
                         #cls[target[1]] = 1   #corresponding class index set to 1 others zero
-                        batches.append(int(target[0]))   #batch index / image id
-                        proposal_idx.append(iou_index)    #proposal number
+                        batches.append(indx_tracker + iou_index)   #batch index / image id
+
+                        objectness[indx_tracker + iou_index] = 1
                         #breakpoint()
                         box = torch.cat((torch.tensor(xy), torch.tensor(wh)))
                         tbox.append(box)
                         tcls.append(target[1].long())
+                elif preds[iou_index] == 0 and iou_p[iou_index] >0.4:
+                     n_batches.append(indx_tracker + iou_index)
+                     objectness[indx_tracker + iou_index] = -1
+            #update indx_tracker
 
-        for i in range(targets.shape[0]):
-            n = batches.count(i) * 2
-            tar_indices = [proposal_idx[j] for j in range(len(batches)) if batches[j] == i]
-            rand = torch.randperm(100)[:n]
-            rand = rand[~torch.isin(rand, torch.tensor(tar_indices))]
-            n1 = n // 3
-            n_batches.extend([i] * rand.shape[0])
-            n_proposalIdx.extend(rand.tolist())
-            if n1:
-                rand1 = torch.randperm(299)[:n1] + 100
-                rand1 = rand1[~torch.isin(rand1, torch.tensor(tar_indices))]
-                n_batches.extend([i] * rand1.shape[0])
-                n_proposalIdx.extend(rand1.tolist())
+            if not int(target[0]) in batch_list and targets[i+1][0]> target[0]:
+                
+                indx_tracker += p[int(target[0])].shape[0]
+                if indx_tracker >batch_size:
+                    breakpoint()
+                batch_list.append(int(target[0]))
 
-        tbox = torch.stack(tbox).to(targets.device)
-        tbox = [tbox]
-        tcls = torch.stack(tcls).to(targets.device)
-        tcls = [tcls]
-        indices.append((torch.tensor(batches).long().to(targets.device), torch.tensor(proposal_idx).to(targets.device)))
-        n_indices.append((torch.tensor(n_batches).long().to(targets.device), torch.tensor(n_proposalIdx).to(targets.device)))
-        return tcls, tbox, indices, p, n_indices, thr_match
+        # for i in range(targets.shape[0]):
+        #     n = batches.count(i) * 2
+        #     tar_indices = [proposal_idx[j] for j in range(len(batches)) if batches[j] == i]
+        #     rand = torch.randperm(100)[:n]
+        #     rand = rand[~torch.isin(rand, torch.tensor(tar_indices))]
+        #     n1 = n // 3
+        #     n_batches.extend([i] * rand.shape[0])
+        #     n_proposalIdx.extend(rand.tolist())
+        #     if n1:
+        #         rand1 = torch.randperm(299)[:n1] + 100
+        #         rand1 = rand1[~torch.isin(rand1, torch.tensor(tar_indices))]
+        #         n_batches.extend([i] * rand1.shape[0])
+        #         n_proposalIdx.extend(rand1.tolist())
+        if tbox:
+            tbox = torch.stack(tbox).to(targets.device)
+            tbox = [tbox]
+        if tcls:
+            tcls = torch.stack(tcls).to(targets.device)
+            tcls = [tcls]
+        indices.append((torch.tensor(batches).long().to(targets.device)))   #, torch.tensor(proposal_idx).to(targets.device)
+        #n_indices.append((torch.tensor(n_batches).long().to(targets.device), torch.tensor(n_proposalIdx).to(targets.device)))
+        p = torch.cat(p).to(targets.device)
+        return tcls, tbox, indices, p, objectness, thr_match
 
 
 

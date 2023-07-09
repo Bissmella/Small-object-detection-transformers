@@ -98,8 +98,8 @@ def train(hyp, opt, device, tb_writer=None):
     pretrained = weights.endswith('.pt')
     down_factor = int(opt.train_img_size/opt.test_img_size)
     if pretrained:
-        with torch_distributed_zero_first(rank):
-            attempt_download(weights)  # download if not found locally
+        #with torch_distributed_zero_first(rank):
+        #    attempt_download(weights)  # download if not found locally
         ckpt = torch.load(weights, map_location=device)  # load checkpoint
         model = Model(opt.cfg or ckpt['model'].yaml,input_mode = opt.input_mode,ch_steam=opt.ch_steam, ch=opt.ch, nc=nc, anchors=hyp.get('anchors'),config=None,sr=opt.super,factor=down_factor).to(device)  # create
         exclude = ['anchor'] if (opt.cfg or hyp.get('anchors')) and not opt.resume else []  # exclude keys
@@ -282,7 +282,8 @@ def train(hyp, opt, device, tb_writer=None):
     nl = 1
     hyp['box'] *= 3. / nl  # scale to layers
     hyp['cls'] *= nc / 80. * 3. / nl  # scale to classes and layers
-    hyp['obj'] *= (imgsz / 640) ** 2 * 3. / nl  # scale to image size and layers
+
+    hyp['obj'] *= (128 / 640) ** 2 * 3. / nl  # imgsz  ** 2 scale to image size and layers  
     model.nc = nc  # attach number of classes to model
     model.hyp = hyp  # attach hyperparameters to model
     model.gr = 1.0  # iou loss ratio (obj_loss = 1.0 or iou)
@@ -458,7 +459,7 @@ def train(hyp, opt, device, tb_writer=None):
                         json.dump(propos, file)
                 continue
                 '''
-                loss, lbox , lobj , lcls, thr_match  = compute_loss(pred, propos.to(device), targets.to(device))  # loss scaled by batch_size
+                loss, lbox , lobj , lcls, thr_match  = compute_loss(pred, propos, targets.to(device))  # loss scaled by batch_size
                 loss_items = torch.cat((lbox, lobj, lcls, loss)).detach()
                 if opt.super: #and not opt.attention and not opt.super_attention:    
                     if opt.input_mode =='IR':
@@ -652,7 +653,7 @@ if __name__ == '__main__':
     parser.add_argument('--ch_steam', type=int, default=3)
     parser.add_argument('--ch', type=int,default=128, help = '3 4 16 midfusion1:64 midfusion2,3:128 midfusion4:256')  #*changed from default to match SAM
     parser.add_argument('--input_mode', type=str,default='RGB',help ='RGB IR RGB+IR(pixel-level fusion) RGB+IR+fusion(feature-level fusion)')
-    parser.add_argument('--batch-size', type=int, default=3, help='total batch size for all GPUs')    #* default 2
+    parser.add_argument('--batch-size', type=int, default=8, help='total batch size for all GPUs')    #* default 2
     parser.add_argument('--train_img_size', type=int,default=1024, help='train image sizes,if use SR,please set 1024')
     parser.add_argument('--test_img_size', type=int, default=512, help='test image sizes')
     parser.add_argument('--hr_input', default=True,action='store_true', help='high resolution input(1024*1024)') #if use SR,please set True
@@ -663,7 +664,7 @@ if __name__ == '__main__':
     parser.add_argument('--noautoanchor', action='store_true', help='disable autoanchor check')
     parser.add_argument('--evolve', action='store_true', help='evolve hyperparameters')
     parser.add_argument('--bucket', type=str, default='', help='gsutil bucket')
-    parser.add_argument('--cache-images', action='store_true', default = False, help='cache images for faster training')  #* changed
+    parser.add_argument('--cache-images', action='store_true', default = True, help='cache images for faster training')  #* changed
     parser.add_argument('--image-weights', action='store_true', help='use weighted image selection for training')
     parser.add_argument('--device', default='cpu', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
     parser.add_argument('--multi-scale', action='store_true', help='vary img-size +/- 50%%')

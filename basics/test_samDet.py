@@ -143,7 +143,7 @@ def test(data,
             t0 += time_synchronized() - t
 
             # Compute loss
-            breakpoint()
+
             if compute_loss:
                 loss += compute_loss(train_out, propos.to(device), targets)[1][:3]  # box, obj, cls
 
@@ -151,13 +151,19 @@ def test(data,
             targets[:, 2:] *= torch.Tensor([width, height, width, height]).to(device)  # to pixels
             lb = [targets[targets[:, 0] == i, 1:] for i in range(nb)] if save_hybrid else []  # for autolabelling
             t = time_synchronized()
-            #breakpoint()
+            bs = out.shape[0]
+            out = out.view(-1, 13)
+            out[:, 0:4] = xywh2xyxy(out[:, 0:4])
+            out = out.view(bs, -1, 13)
+
             out = non_max_suppression(out, conf_thres=conf_thres, iou_thres=iou_thres, labels=lb, multi_label=True)#out inside ()
+
             # out = weighted_boxes(out,image_size=imgsz, conf_thres=conf_thres, iou_thres=iou_thres, labels=lb, multi_label=True)
             t1 += time_synchronized() - t
-        #breakpoint()
+  
         # Statistics per image
         for si, pred in enumerate(out):
+
             labels = targets[targets[:, 0] == si, 1:]
             nl = len(labels)
             tcls = labels[:, 0].tolist() if nl else []  # target class
@@ -171,6 +177,7 @@ def test(data,
 
             # Predictions
             predn = pred.clone()
+
             scale_coords(img[si].shape[1:], predn[:, :4], shapes[si][0], shapes[si][1])  # native-space pred
 
             # Append to text file
@@ -226,6 +233,7 @@ def test(data,
                     # Search for detections
                     if pi.shape[0]:
                         # Prediction to target ious
+
                         ious, i = box_iou(predn[pi, :4], tbox[ti]).max(1)  # best ious, indices
 
                         # Append detections
