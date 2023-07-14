@@ -101,7 +101,7 @@ class ImageEncoderViT(nn.Module):
         #nn.Linear(192, 192) #removed (img_size //16) *
         #local blocks
         self.blocks = nn.ModuleList()
-        window_size = [8, 6, 8, 6, 8, 6, 8, 6, 8, 6, 6]
+        window_size = [13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13]   # lowest common multiple of 7, 9, 11 is 693 much bigger than 128
         padding = [True, False, True, False, True, False, True, False, True, False, True]
         for i in range(depth):
             block = Block(
@@ -113,9 +113,9 @@ class ImageEncoderViT(nn.Module):
                 act_layer=act_layer,
                 use_rel_pos=use_rel_pos,
                 rel_pos_zero_init=rel_pos_zero_init,
-                window_size=9,#window_size[i] if i not in global_attn_indexes else 0,
+                window_size=window_size[i],#window_size[i] if i not in global_attn_indexes else 0,
                 top_padding = False,
-                input_size=(img_size // 8, img_size // 8),   #* changed from  // patch_size to 4
+                input_size=(img_size // 13, img_size // 13),   #* changed from  // patch_size to 4
             )
             self.blocks.append(block)
         #a second pathc embedding
@@ -269,7 +269,7 @@ class ImageEncoderViT(nn.Module):
         y[0] = self.neck1(y[0].permute(0, 3, 1, 2)) ##[:, :, torch.arange(W) % 5 != 4,:]
         y[1] = self.neck2(y[1].permute(0, 3, 1, 2)) ##[:, :, torch.arange(W) % 5 != 4,:]
         y[2] =  F.interpolate(self.neck3(y[2].permute(0, 3, 1, 2)), scale_factor=4, mode='bilinear', align_corners=False)  ##[:, :, torch.arange(Wg) % 5 != 4,:]
-        y[0] = y[0] + y[2]
+        #y[0] = y[0] + y[2]
         return y
 
 class Block(nn.Module):
@@ -316,12 +316,12 @@ class Block(nn.Module):
         )
 
         self.norm2 = norm_layer(dim)
-        #self.mlp = MLPBlock(embedding_dim=dim, mlp_dim=int(dim * mlp_ratio), act=act_layer)
-        self.lin1 = nn.Linear(dim, dim)
-        self.conv1 = nn.Conv2d(dim , dim, 2)
-        self.gelu = nn.GELU()
-        self.conv2 = nn.Conv2d(dim, dim, 2)
-        self.lin2 = nn.Linear(dim, dim)
+        self.mlp = MLPBlock(embedding_dim=dim, mlp_dim=int(dim * mlp_ratio), act=act_layer)
+        # self.lin1 = nn.Linear(dim, dim)
+        # self.conv1 = nn.Conv2d(dim , dim, 2)
+        # self.gelu = nn.GELU()
+        # self.conv2 = nn.Conv2d(dim, dim, 2)
+        # self.lin2 = nn.Linear(dim, dim)
         self.window_size = window_size
         self.top_padding = top_padding
 
@@ -341,18 +341,18 @@ class Block(nn.Module):
             
         x = shortcut + x
 
-        nshortcut = x
-        x= self.lin1(self.norm2(x))
-        x = x.permute(0, 3, 1, 2)
-        x = F.pad(x, (0, 1, 0, 1))
-        x = self.conv1(x)
-        x = F.pad(x, (0, 1, 0, 1))
-        x = self.gelu(x)
-        x = self.conv2(x)
-        x = x.permute(0, 2, 3, 1)
-        x = self.lin2(x)
-        x = x + nshortcut
-        #x = x + self.mlp(self.norm2(x))
+        #nshortcut = x
+        # x= self.lin1(self.norm2(x))
+        # x = x.permute(0, 3, 1, 2)
+        # x = F.pad(x, (0, 1, 0, 1))
+        # x = self.conv1(x)
+        # x = F.pad(x, (0, 1, 0, 1))
+        # x = self.gelu(x)
+        # x = self.conv2(x)
+        # x = x.permute(0, 2, 3, 1)
+        # x = self.lin2(x)
+        # x = x + nshortcut
+        x = x + self.mlp(self.norm2(x))
         return x
 
 class Attention(nn.Module):

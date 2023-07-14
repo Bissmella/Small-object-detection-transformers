@@ -742,7 +742,7 @@ class LoadImagesAndLabels_sr(Dataset):  # for training/testing
                 elif mini > 1:
                     shapes[i] = [1, 1 / mini]
 
-            self.batch_shapes = np.ceil(np.array(shapes) * img_size / stride + pad).astype(np.int) * stride
+            self.batch_shapes = np.ceil(np.array(shapes) * img_size / stride + pad).astype(np.int32) * stride
 
         # Cache images into memory for faster training (WARNING: large datasets may exceed system RAM)
         self.imgs = [None] * n
@@ -817,10 +817,10 @@ class LoadImagesAndLabels_sr(Dataset):  # for training/testing
         index = self.indices[index]  # linear, shuffled, or image_weights
 
         hyp = self.hyp
-        mosaic = False   #self.mosaic and random.random() < hyp['mosaic']
+        mosaic = False  #self.mosaic and random.random() < hyp['mosaic']
         if mosaic:
             # Load mosaic
-            img, ir, labels = load_mosaic(self, index) #zjq
+            img, ir, fm, propos, labels = load_mosaic(self, index) #zjq
             #ir = load_ir(self, index) #zjq
             shapes = None
 
@@ -855,26 +855,28 @@ class LoadImagesAndLabels_sr(Dataset):  # for training/testing
                 labels[:, 3] = ratio[0] * w * (x[:, 1] + x[:, 3] / 2) + pad[0]
                 labels[:, 4] = ratio[1] * h * (x[:, 2] + x[:, 4] / 2) + pad[1]
 
-            proposals = np.array(proposals)
+            
             if len(proposals) > 0:
                 #propos[:, 0] = propos[:, 0] - propos[:, 2] /2
                 #propos[:, 1] = propos[:, 1] - propos[:, 3] /2
 
                 propos = proposals.copy()
-                propos = propos.astype('float32')
-                propos[:, 2] = propos[:, 0] + propos[:, 2]
-                propos[:, 3] = propos[:, 1] + propos[:, 3]
-
-        if self.augment:
-            #Augment imagespace
-            #breakpoint()
-            if not mosaic:
-                img, ir, fm, propos, labels = random_perspective(img, ir, fm, propos, labels,
-                                                 degrees=hyp['degrees'],
-                                                 translate=hyp['translate'],
-                                                 scale=hyp['scale'],
-                                                 shear=hyp['shear'],
-                                                 perspective=hyp['perspective'])
+                #propos = propos.astype('float32')
+                #propos[:, 0] = (proposals[:, 0] - proposals[:, 2]/2) *w
+                #propos[:, 1] = (proposals[:, 1] - proposals[:, 3]/2) *h
+                propos[:, 2] = proposals[:, 0] + proposals[:, 2]
+                propos[:, 3] = proposals[:, 1] + proposals[:, 3] 
+                #breakpoint()
+        # if self.augment:
+        #     #Augment imagespace
+        #     #breakpoint()
+        #     if not mosaic:
+        #         img, ir, fm, propos, labels = random_perspective(img, ir, fm, propos, labels,
+        #                                          degrees=hyp['degrees'],
+        #                                          translate=hyp['translate'],
+        #                                          scale=hyp['scale'],
+        #                                          shear=hyp['shear'],
+        #                                          perspective=hyp['perspective'])
 
             # Augment colorspace
             #augment_hsv(img, hgain=hyp['hsv_h'], sgain=hyp['hsv_s'], vgain=hyp['hsv_v'])
@@ -892,10 +894,11 @@ class LoadImagesAndLabels_sr(Dataset):  # for training/testing
             labels[:, [1, 3]] /= img.shape[1]  # normalized width 0-1
         if npr:
             propos[:, 0:4] = xyxy2xywh(propos[:, 0:4])  #conver back from xyxy to xywh
-            propos[:, [0, 1, 2, 3]] /= 512    #normalized xywh to 1
+
+            propos[:, [0, 1, 2, 3]] /= 512#img.shape[0]    #normalized xywh to 1
         if self.augment:
             # flip up-down
-            if random.random() < 0.5:#hyp['flipud']:
+            if random.random() < 0.3:#hyp['flipud']:
                 img = np.flipud(img)
                 ir = np.flipud(ir) #zjq
                 fm = np.flipud(fm)
@@ -1021,7 +1024,10 @@ def load_propos(self, index):
     else:
         propos = [d['bbox'] for d in propos]
 
-
+    propos = np.array(propos).astype('float32')
+    # propos[:, 0]  = propos[:,0] + propos[:,2]/2
+    # propos[:, 1]  = propos[:,1] + propos[:,3]/3
+    # propos[:, 0:4] = propos[:, 0:4] / 512.
     return propos
 
 
@@ -1046,36 +1052,59 @@ def augment_hsv(img, hgain=0.5, sgain=0.5, vgain=0.5):
 
 def load_mosaic(self, index): #拼接图像
     # loads images in a 4-mosaic
+    #feature map size
+    s_f = 64
+    propos4 = []
+    
 
     labels4 = []
     s = self.img_size
     yc, xc = [int(random.uniform(-x, 2 * s + x)) for x in self.mosaic_border]  # mosaic center x, y
+    yc_f, xc_f = int(yc /16), int(xc/16)
     indices = [index] + [self.indices[random.randint(0, self.n - 1)] for _ in range(3)]  # 3 additional image indices
     for i, index in enumerate(indices):
         # Load image
         img, _, (h, w) = load_image(self, index)
         ir = load_ir(self, index) #zjq
-
+        fm = load_feature_map(self, index)
+        propos = load_propos(self, index)
+        h_f, w_f = 64.0, 64.0
         # place img in img4
         if i == 0:  # top left
             img4 = np.full((s * 2, s * 2, img.shape[2]), 114, dtype=np.uint8)  # base image with 4 tiles
             ir4 = np.full((s * 2, s * 2, ir.shape[2]), 114, dtype=np.uint8) #zjq
+            fm4 = np.full((s_f * 2, s_f * 2, fm.shape[2]), 114., dtype=np.float32)
             x1a, y1a, x2a, y2a = max(xc - w, 0), max(yc - h, 0), xc, yc  # xmin, ymin, xmax, ymax (large image)
             x1b, y1b, x2b, y2b = w - (x2a - x1a), h - (y2a - y1a), w, h  # xmin, ymin, xmax, ymax (small image)
+            #fm
+            x1a_f, y1a_f, x2a_f, y2a_f = max(xc_f - w_f, 0), max(yc_f - h_f, 0), xc_f, yc_f
+            x1b_f, y1b_f, x2b_f, y2b_f = w_f - (x2a_f - x1a_f), h_f - (y2a_f - y1a_f), w_f, h_f
         elif i == 1:  # top right
             x1a, y1a, x2a, y2a = xc, max(yc - h, 0), min(xc + w, s * 2), yc
             x1b, y1b, x2b, y2b = 0, h - (y2a - y1a), min(w, x2a - x1a), h
+            #fm
+            x1a_f, y1a_f, x2a_f, y2a_f = xc_f, max(yc_f - h_f, 0), min(xc_f + w_f, s_f * 2), yc_f
+            x1b_f, y1b_f, x2b_f, y2b_f =  0, h_f - (y2a_f - y1a_f), min(w_f, x2a_f - x1a_f), h_f
         elif i == 2:  # bottom left
             x1a, y1a, x2a, y2a = max(xc - w, 0), yc, xc, min(s * 2, yc + h)
             x1b, y1b, x2b, y2b = w - (x2a - x1a), 0, w, min(y2a - y1a, h)
+            #fm
+            x1a_f, y1a_f, x2a_f, y2a_f = max(xc_f - w_f, 0), yc_f, xc_f, min(s_f * 2, yc_f + h_f)
+            x1b_f, y1b_f, x2b_f, y2b_f = w_f - (x2a_f - x1a_f), 0, w_f, min(y2a_f - y1a_f, h_f)
         elif i == 3:  # bottom right
             x1a, y1a, x2a, y2a = xc, yc, min(xc + w, s * 2), min(s * 2, yc + h)
             x1b, y1b, x2b, y2b = 0, 0, min(w, x2a - x1a), min(y2a - y1a, h)
+            #fm
+            x1a_f, y1a_f, x2a_f, y2a_f = xc_f, yc_f, min(xc_f + w_f, s_f * 2), min(s_f * 2, yc_f + h_f)
+            x1b_f, y1b_f, x2b_f, y2b_f = 0, 0, min(w_f, x2a_f - x1a_f), min(y2a_f - y1a_f, h_f)
 
         img4[y1a:y2a, x1a:x2a] = img[y1b:y2b, x1b:x2b]  # img4[ymin:ymax, xmin:xmax]
         ir4[y1a:y2a, x1a:x2a] = ir[y1b:y2b, x1b:x2b]
+
+        fm4[int(y1a_f):int(y2a_f), int(x1a_f):int(x2a_f)] = fm[int(y1b_f):int(y2b_f), int(x1b_f):int(x2b_f)]
         padw = x1a - x1b
         padh = y1a - y1b
+
 
         # Labels
         x = self.labels[index]
@@ -1087,22 +1116,40 @@ def load_mosaic(self, index): #拼接图像
             labels[:, 4] = h * (x[:, 2] + x[:, 4] / 2) + padh
         labels4.append(labels)
 
+        #propos
+        x = propos
+        labels = x.copy()
+        if x.size > 0:  # Normalized xywh to pixel xyxy format
+            labels[:, 0] = w * (x[:, 0] - x[:, 2] / 2) + padw
+            labels[:, 1] = h * (x[:, 1] - x[:, 3] / 2) + padh
+            labels[:, 2] = w * (x[:, 0] + x[:, 2] / 2) + padw
+            labels[:, 3] = h * (x[:, 1] + x[:, 3] / 2) + padh
+        propos4.append(labels)
+
     # Concat/clip labels
     if len(labels4):
         labels4 = np.concatenate(labels4, 0)
         np.clip(labels4[:, 1:], 0, 2 * s, out=labels4[:, 1:])  # use with random_perspective
         # img4, labels4 = replicate(img4, labels4)  # replicate
 
-    # Augment
-    img4, ir4, labels4 = random_perspective(img4, ir4, labels4,
+    # Concat/clip propos
+    if len(propos4):
+        propos4 = np.concatenate(propos4, 0)
+        np.clip(propos4[:, 0:], 0, 2 * s, out=propos4[:, 0:])  # use with random_perspective
+        # img4, labels4 = replicate(img4, labels4)  # replicate
+
+    #Augment
+    img4, ir4, fm4, propos4, labels4 = random_perspective(img4, ir4, fm4, propos4, labels4,
                                        degrees=self.hyp['degrees'],
-                                       translate=self.hyp['translate'],
+                                       translate=0.0,   #self.hyp['translate'],
                                        scale=self.hyp['scale'],
                                        shear=self.hyp['shear'],
                                        perspective=self.hyp['perspective'],
                                        border=self.mosaic_border)  # border to remove
 
-    return img4, ir4, labels4
+    #img, ir, fm, propos, targets
+
+    return img4, ir4, fm4, propos4, labels4
 
 
 def load_mosaic9(self, index): #not use
@@ -1236,8 +1283,12 @@ def random_perspective(img, ir, fm, propos, targets=(), degrees=10, translate=.1
     height = img.shape[0] + border[0] * 2  # shape(h,w,c)
     width = img.shape[1] + border[1] * 2
     
-    fm_height = fm.shape[0] + border[0] * 2
-    fm_width = fm.shape[1] + border[1] * 2
+    border_mf = [-32, -32]
+
+    fm_height = fm.shape[0] + border_mf[0] * 2
+    fm_width = fm.shape[1] + border_mf[1] * 2
+
+    border_mf = [-32, -32]
 
     # Center
     C = np.eye(3)
@@ -1299,7 +1350,7 @@ def random_perspective(img, ir, fm, propos, targets=(), degrees=10, translate=.1
     Tm[1, 2] = T[1,2]/16#random.uniform(0.5 - translate, 0.5 + translate) * fm_height  # y translation (pixels)
 
     Mm = Tm @ S @ R @ P @ Cm  # order of operations (right to left) is IMPORTANT
-    if (border[0] != 0) or (border[1] != 0) or (Mm != np.eye(3)).any():  # image changed
+    if (border_mf[0] != 0) or (border_mf[1] != 0) or (Mm != np.eye(3)).any():  # image changed
         if perspective:
             fm = cv2.warpPerspective(fm, Mm, dsize=(fm_width, fm_height), borderValue=(114, 114, 114))
            

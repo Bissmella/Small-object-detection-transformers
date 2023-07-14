@@ -8,10 +8,11 @@ import numpy as np
 import torch
 import yaml
 from tqdm import tqdm
+from pathlib import Path
 
-from .models.experimental import attempt_load
-from .utils.datasets import create_dataloader, create_dataloader_sr
-from .utils.general import coco80_to_coco91_class, check_dataset, check_file, check_img_size, check_requirements, \
+from basics.models.experimental import attempt_load
+from basics.utils.datasets import create_dataloader, create_dataloader_sr
+from .utils.general_samDet import coco80_to_coco91_class, check_dataset, check_file, check_img_size, check_requirements, \
     box_iou, non_max_suppression,weighted_boxes, scale_coords, xyxy2xywh, xywh2xyxy, set_logging, increment_path, colorstr
 from .utils.metrics import ap_per_class, ConfusionMatrix
 from .utils.plots import plot_images, output_to_target, plot_study_txt
@@ -145,16 +146,16 @@ def test(data,
             # Compute loss
 
             if compute_loss:
-                loss += compute_loss(train_out, propos.to(device), targets)[1][:3]  # box, obj, cls
+                loss += torch.cat(compute_loss(train_out, propos, targets)[1:4])    #*[1][:3]  # box, obj, cls
 
             # Run NMS
             targets[:, 2:] *= torch.Tensor([width, height, width, height]).to(device)  # to pixels
             lb = [targets[targets[:, 0] == i, 1:] for i in range(nb)] if save_hybrid else []  # for autolabelling
             t = time_synchronized()
             bs = out.shape[0]
-            out = out.view(-1, 13)
-            out[:, 0:4] = xywh2xyxy(out[:, 0:4])
-            out = out.view(bs, -1, 13)
+            #out = out.view(-1, 13)
+            #out[:, 0:4] = xywh2xyxy(out[:, 0:4])
+            #out = out.view(bs, -1, 13)
 
             out = non_max_suppression(out, conf_thres=conf_thres, iou_thres=iou_thres, labels=lb, multi_label=True)#out inside ()
 
@@ -358,15 +359,15 @@ def test(data,
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(prog='test.py')
-    parser.add_argument('--weights', nargs='+', type=str, default='small_EDSR_fold1.pt', help='model.pt path(s)')
-    parser.add_argument('--data', type=str, default='data/SRvedai.yaml', help='*.data path')
-    parser.add_argument('--batch-size', type=int, default=1, help='size of each image batch')
+    parser.add_argument('--weights', nargs='+', type=str, default='outputs_SAM/yoloSAMDET_vitB_RGB/run/train/exp287/weights/last.pt', help='model.pt path(s)')
+    parser.add_argument('--data', type=str, default='codes/models/SRvedai.yaml', help='*.data path')
+    parser.add_argument('--batch-size', type=int, default=8, help='size of each image batch')
     parser.add_argument('--img-size', type=int, default=512, help='inference size (pixels)')
-    parser.add_argument('--input_mode', type=str, default='RGB+IR') #RGB IR RGB+IR RGB+IR+fusion
+    parser.add_argument('--input_mode', type=str, default='RGB') #RGB IR RGB+IR RGB+IR+fusion
     parser.add_argument('--conf-thres', type=float, default=0.001, help='object confidence threshold')
     parser.add_argument('--iou-thres', type=float, default=0.6, help='IOU threshold for NMS')
     parser.add_argument('--task', default='val', help='train, val, test, speed or study')
-    parser.add_argument('--device', default='1', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
+    parser.add_argument('--device', default='cpu', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
     parser.add_argument('--single-cls', action='store_true', help='treat as single-class dataset')
     parser.add_argument('--augment', action='store_true', help='augmented inference')
     parser.add_argument('--verbose', action='store_true', help='report mAP by class')
@@ -374,7 +375,7 @@ if __name__ == '__main__':
     parser.add_argument('--save-hybrid', action='store_true', help='save label+prediction hybrid results to *.txt')
     parser.add_argument('--save-conf', action='store_true', help='save confidences in --save-txt labels')
     parser.add_argument('--save-json', action='store_true', help='save a cocoapi-compatible JSON results file')
-    parser.add_argument('--project', default='runs/test', help='save to project/name')
+    parser.add_argument('--project', default='outputs_SAM/yoloSAMDET_vitB_RGB/run/test', help='save to project/name')
     parser.add_argument('--name', default='exp', help='save to project/name')
     parser.add_argument('--exist-ok', action='store_true', help='existing project/name ok, do not increment')
     opt = parser.parse_args()

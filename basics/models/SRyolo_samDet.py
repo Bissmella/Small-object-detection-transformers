@@ -37,7 +37,7 @@ class Detect(nn.Module):
     stride = None  # strides computed during build
     export = False  # onnx export
 
-    def __init__(self, nc=80, in_channels= 4608, representation_size=1024, anchors=(), ch=()):  # detection layer
+    def __init__(self, nc=80, in_channels= 4610, representation_size=1024, anchors=(), ch=()):  # detection layer
         super(Detect, self).__init__()
         self.nc = nc  # number of classes
         self.no = nc + 5  # number of outputs per anchor
@@ -65,7 +65,7 @@ class Detect(nn.Module):
         # x = self.c31(x)
         # x = self.conv2(x)
         # x= self.c32(x)
-        x = x.flatten(start_dim=1)
+        #x = x.flatten(start_dim=1)
 
         x = F.relu(self.fc6(x))
         x = F.relu(self.fc7(x))
@@ -78,16 +78,17 @@ class Detect(nn.Module):
         x = torch.cat(z, 1)
         bs, _ = x.shape
         if not self.training:
-                y = x.sigmoid()
+                x[:,[0, 1, 4, 5, 6, 7, 8, 9, 10, 11, 12]] = x[:,[0, 1, 4, 5, 6, 7, 8, 9, 10, 11, 12]].sigmoid()
+                y = x
                 #y = y.view(propos.shape[0], -1, self.no)
                 propos = propos.to(y.device)
                 #y[..., 0:2] = y[..., 0:2] * 2. * 512. + propos[..., 0:2]#* 2. - 0.5 + self.grid[i]) * self.stride[i]  # xy
                 #y[..., 2:4] = ((y[..., 2:4] * 2) ** 2) * 512. + propos[..., 2:4]#* 2) ** 2 * self.anchor_grid[i]
                 
-                y[..., 0] = (y[..., 0]  * (propos[..., 2] + 1e-6)) + (propos[..., 0] * 1024)
-                y[..., 1] = (y[..., 1] * (propos[..., 3] + 1e-6)) + (propos[..., 1] * 1024)
-                y[..., 2] = torch.exp(y[..., 2]) * (propos[..., 2] + 1e-6) * 1024
-                y[..., 3] = torch.exp(y[..., 3]) * (propos[..., 3] + 1e-6) * 1024
+                y[..., 0] = (y[..., 0]  * (propos[..., 2] + 1e-6)) + propos[..., 0] * 1024
+                y[..., 1] = ((y[..., 1] * (propos[..., 3] + 1e-6)) + propos[..., 1]) * 1024
+                y[..., 2] = torch.exp(y[..., 2]) * (propos[..., 2] + 1e-6) *1024#*16#* 64
+                y[..., 3] = torch.exp(y[..., 3]) * (propos[..., 3] + 1e-6) *1024#*16#* 64
                 # x = x.view(propos.shape[0], -1, self.no)
                 # x = x.unsqueeze(0)
                 #y = y.unsqueeze(0)
@@ -149,6 +150,7 @@ class Model(nn.Module):
         self.conv2 = Conv(128, 64)
         self.c32 = C3(64, 32, 3)
         self.pooler = ops.RoIPool((12, 12), 1.0)
+
         self.detect = Detect(nc=8)
         
         # self.f1=self.yaml['f1']  #蒸馏特征层层数
@@ -271,6 +273,7 @@ class Model(nn.Module):
             '''
             _outputs = propos
             #feature_maps = x
+
             x = self.conv1(x)
             x = self.c31(x)
             x = self.conv2(x)
@@ -278,12 +281,22 @@ class Model(nn.Module):
             
 
             rois, proposals, batch_lenghts = prepare(_outputs, x.device)
+            # rois_pool = deepcopy(rois)
+            # for i, roi_pool in enumerate(rois_pool):
 
+            #     roi_pool = torch.ceil(roi_pool[:, 0:4])
+            #     rois_pool[i] = roi_pool.detach()
+            #rois = rois.detach()
             x = self.pooler(x, rois)
 
+            x = x.flatten(start_dim=1)
+            proposals = proposals.detach()
+            wh = deepcopy(proposals[:, -2:])
+            wh_d = wh.detach()
+            x = torch.cat([x, wh_d], dim=1)
             # rois_pool, rois, zero_mask, proposals = prepare(_outputs)
             # rois_pool = rois_pool.to(x.device)
-            # zero_mask = zero_mask.to(x.device)
+            # zero_mask = zero_mask.to(x.device)colorstr(f'{task}: ')
             # rois = rois.to(x.device)
             # output_size = (12, 12)
 
@@ -293,7 +306,7 @@ class Model(nn.Module):
             # pooled_features = pooled_features.type(torch.float32)
             # zero_mask = zero_mask[:, None, None, None]
             # pooled_features = pooled_features * (~zero_mask).int()
-
+            #proposals[:, 0:4] = proposals[:, 0:4] * 64
             y = self.detect(x, proposals)
 
             
@@ -313,7 +326,7 @@ class Model(nn.Module):
                 y[0] = torch.split(y[0], batch_lenghts)
                 y[0] = pad_sequence(y[0], batch_first=True, padding_value=0)
                 y = tuple(y)
-                breakpoint()
+
                 return rois,y#(y[17],y[20],y[23])#(y[4],y[8],y[18],y[21],y[24])#(y[7],y[15],y[-2])(y[-4],y[-3],y[-2])
 
 
@@ -345,7 +358,7 @@ class Model(nn.Module):
 
     def fuse(self):  # fuse model Conv2d() + BatchNorm2d() layers
         print('Fusing layers... ')
-        for m in self.model.modules():
+        for m in self.modules():   ##self.model  to self.modules
             if (type(m) is Conv) and hasattr(m, 'bn'):
                 m.conv = fuse_conv_and_bn(m.conv, m.bn)  # update conv
                 delattr(m, 'bn')  # remove batchnorm

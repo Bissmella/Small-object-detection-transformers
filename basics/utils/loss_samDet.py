@@ -110,6 +110,7 @@ class ComputeLoss:
         self.balance = {3: [4.0, 1.0, 0.4]}.get(1, [4.0, 1.0, 0.25, 0.06, .02])  # P3-P7  #*changed det.nl changed to 1
         self.ssi = 0    #list(det.stride).index(16) if autobalance else 0  # stride 16 index      #*changed hardcoded to 0
         self.BCEcls, self.BCEobj, self.gr, self.hyp, self.autobalance = BCEcls, BCEobj, model.gr, h, autobalance
+        self.mse = nn.MSELoss()
         #TODO  remove below for loop and hard code
         self.na = None
         self.nc = det.nc
@@ -122,15 +123,15 @@ class ComputeLoss:
     def __call__(self, p, propos, targets):  # predictions, targets, model
         device = targets.device
         lcls, lbox, lobj = torch.zeros(1, device=device), torch.zeros(1, device=device), torch.zeros(1, device=device)
-        tcls, tbox, indices, proposals, n_indices, thr_match = self.build_targets(propos, targets, p.shape[1])  # targets
+        tcls, tbox, tcord, indices, proposals, n_indices, thr_match = self.build_targets(propos, targets, p.shape[1])  # targets
 
         # Losses
         
         for i, pi in enumerate(p):  # layer index, layer predictions
             b = indices[i]  # #, a    image, proposal   --image, anchor, gridy, gridx
 
-            obj = n_indices[..., 0] == 1  # in paper this is Iobj_i
-            noobj = n_indices[..., 0] == 0  # in paper this is Inoobj_i
+            obj = n_indices == 1  #    [..., 0]    in paper this is Iobj_i
+            noobj = n_indices == 0  #   [..., 0]    in paper this is Inoobj_i
 
 
             tobj = torch.zeros_like(pi[..., 0], device=device)  # target obj
@@ -146,13 +147,14 @@ class ComputeLoss:
                 #ps[:, :4] = ps[:, :4].sigmoid()
                 predicted_boxes[:, 0] = ps[:, 0].sigmoid() * (proposals[b, 2] + 1e-6) + proposals[b, 0]
                 predicted_boxes[:, 1] = ps[:, 1].sigmoid() * (proposals[b, 3]+ 1e-6) + proposals[b, 1]
-                #pwh = ps[:, 2:4].sigmoid()   + proposals[b, a, 3:5]  #.sigmoid()     #*changed (ps[:, 2:4].sigmoid() * 2) ** 2 * anchors[i] #对目标宽高预测值进行sigmoid运算后乘以2再平方再乘以对应的anchor的宽高得到预测框的宽高值
+                pxy = ps[:, :2].sigmoid()
+                pwh = ps[:, 2:4]    #.sigmoid()   + proposals[b, a, 3:5]  #.sigmoid()     #*changed (ps[:, 2:4].sigmoid() * 2) ** 2 * anchors[i] #对目标宽高预测值进行sigmoid运算后乘以2再平方再乘以对应的anchor的宽高得到预测框的宽高值
                 predicted_boxes[:, 2] = torch.exp(ps[:, 2]) * (proposals[b, 2] + 1e-6)
                 predicted_boxes[:, 3] = torch.exp(ps[:, 3]) * (proposals[b, 3] + 1e-6)
-                #pbox = torch.cat((pxy, pwh), 1)  # predicted box
+                pbox = torch.cat((pxy, pwh), 1)  # predicted box
                 iou = bbox_iou(predicted_boxes.T, tbox[i], x1y1x2y2=False, CIoU=True)  # iou(prediction, target) .T 矩阵转置
                 
-                lbox += (1.0 - iou).mean()  # iou loss   F.mse_loss(pbox, tbox[i])#
+                lbox += (1.0 - iou).mean()  # self.mse(pbox, tcord[i])    # iou loss   F.mse_loss(pbox, tbox[i])#
 
                 # Objectness
 
@@ -160,18 +162,24 @@ class ComputeLoss:
                 
                 # Classification
                 if self.nc > 1:  # cls loss (only if multiple classes)
-                    t = torch.full_like(ps[:, 5:], self.cn, device=device)  # targets
+                    # t = torch.full_like(ps[:, 5:], self.cn, device=device)  # targets
+                    
+                    # t[range(n), tcls[i]] = self.cp
+                    # lcls += self.BCEcls(ps[:, 5:], t)  # BCE
+                    
+                    #new cls loss here
+                    t = torch.full_like(pi[:, 4:], self.cn, device=device)
+                    t[b, tcls[i]] = 1
+                    t = t[:, :self.nc]
 
-                    t[range(n), tcls[i]] = self.cp
-                    lcls += self.BCEcls(ps[:, 5:], t)  # BCE
-
+                    lcls += self.BCEcls(pi[:, 5:], t)
                 # Append targets to text file
                 # with open('targets.txt', 'a') as file:
                 #     [file.write('%11.5g ' * 4 % tuple(x) + '\n') for x in torch.cat((txy[i], twh[i]), 1)]
 
-            obji = self.BCEobj(ps[..., 4], tobj[b])
-            obji += self.BCEobj(pi[..., 4][noobj], tobj[noobj])    #nb, na
-            lobj += obji * self.balance[i]  # obj loss
+            #obji = self.BCEobj(pi[b][..., 4], tobj[b])     #ps
+            #obji += self.BCEobj(pi[..., 4][noobj], tobj[noobj])    #nb, na
+            lobj += 0    #obji * self.balance[i]  # obj loss
 
             if self.autobalance:
                 self.balance[i] = self.balance[i] * 0.9999 + 0.0001 / obji.detach().item()
@@ -180,8 +188,9 @@ class ComputeLoss:
             self.balance = [x / self.balance[self.ssi] for x in self.balance]
         lbox *= self.hyp['box']
         lobj *= self.hyp['obj']
+        lcls = lcls / p.shape[1]
         lcls *= self.hyp['cls']
-        bs = tobj.shape[0]  # batch size
+        bs = 8#tobj.shape[0]  # batch size
 
         loss = lbox + lobj + lcls
         return loss * bs, lbox , lobj , lcls, thr_match #loss * bs, torch.cat((lbox, lobj, lcls, loss)).detach() # .detach_() 和 .data用于切断反向传播
@@ -213,7 +222,9 @@ class ComputeLoss:
 
         # p[:,:, 1:5] = p[:, :, 1:5] / 64.0
 
-        #TODO batch_size to be passed to this func
+        
+        #raising targets from 0-1 to 64  according to proposals and feature maps
+        #targets[:, 2: 6] = targets[:, 2:6] * 64
         objectness = torch.zeros(batch_size)
        
         tars = torch.zeros(targets.shape[0]).to(targets.device)  #track keepr of which target has proposal or not
@@ -221,6 +232,7 @@ class ComputeLoss:
         n_indices =[]
 
         tbox = []
+        tcord = []
         tcls = []  #8 is the number of classes
         batches =[]
         proposal_idx = []
@@ -229,17 +241,17 @@ class ComputeLoss:
         indx_tracker = 0 
         #list to track which batche's targets count has been added to indx_tracker
         batch_list = []
-        if int(targets[0, 0]) != 0:
+        if targets.shape[0] >0 and int(targets[0, 0]) != 0:
             for i in range(int(targets[0, 0])):
                 indx_tracker += p[i].shape[0]
                 batch_list.append(i)
         for i, target in enumerate(targets):
-            if batch_list[-1] -1 != int(target[0]):
-                for i in range( batch_list[-1] -1, int(target[0])):
-                    indx_tracker += p[i].shape[0]
-                    batch_list.append(i)
+            if len(batch_list) and int(target[0]) > batch_list[-1] +1 :
+                for j in range( batch_list[-1] +1, int(target[0])):
+                    indx_tracker += p[j].shape[0]
+                    batch_list.append(j)
             preds = torch.zeros(p[int(target[0])].shape[0]).to(targets.device)   #keep track of which proposal is assigned or not
-            iou_p = bbox_iou(target[2:6], p[int(target[0])][:,0:4], x1y1x2y2=False, CIoU=True)  #iou between target and proposals of same image [target[0]] as index for proposals of same image
+            iou_p = bbox_iou(target[2:6], p[int(target[0])][:,0:4], x1y1x2y2=False, CIoU=False)  #iou between target and proposals of same image [target[0]] as index for proposals of same image
             iou_indices = iou_p.argsort(descending=True, dim=0)
             for iou_index in iou_indices:
                 p_taken = preds[iou_index] == 1
@@ -255,26 +267,31 @@ class ComputeLoss:
                         tars[i] = 1             #target has a proposal
                         xy = [target[2] , target[3]]  #  - p[int(target[0]), iou_index, 1]   - p[int(target[0]), iou_index, 2]  - p[1]difference of ground-truth and proposal xy
                         wh = [target[4], target[5]] #   - p[int(target[0]), iou_index, 3] - p[int(target[0]), iou_index, 4] - p[2] - p[3] difference of ground-truth and porposal wh
-                        if indx_tracker + iou_index>batch_size:
-                            breakpoint()
+                        x_coord = [(target[2] - p[int(target[0])][iou_index, 0])/p[int(target[0])][iou_index, 2]]
+                        y_coord = [(target[3] - p[int(target[0])][iou_index, 1])/p[int(target[0])][iou_index, 3]]
+                        w_coord = [torch.log(target[4] /p[int(target[0])][iou_index, 2])]
+                        h_coord = [torch.log(target[5] /p[int(target[0])][iou_index, 3])]
+                        # if indx_tracker + iou_index>batch_size:
+                        #     breakpoint()
                         #cls[target[1]] = 1   #corresponding class index set to 1 others zero
                         batches.append(indx_tracker + iou_index)   #batch index / image id
 
                         objectness[indx_tracker + iou_index] = 1
                         #breakpoint()
                         box = torch.cat((torch.tensor(xy), torch.tensor(wh)))
+                        box_coord = torch.cat((torch.tensor(x_coord), torch.tensor(y_coord), torch.tensor(w_coord), torch.tensor(h_coord)))
                         tbox.append(box)
+                        tcord.append(box_coord)
                         tcls.append(target[1].long())
                 elif preds[iou_index] == 0 and iou_p[iou_index] >0.4:
                      n_batches.append(indx_tracker + iou_index)
                      objectness[indx_tracker + iou_index] = -1
             #update indx_tracker
 
-            if not int(target[0]) in batch_list and targets[i+1][0]> target[0]:
+            if not int(target[0]) in batch_list and i + 1 <targets.shape[0] and targets[i+1][0]> target[0]:
                 
                 indx_tracker += p[int(target[0])].shape[0]
-                if indx_tracker >batch_size:
-                    breakpoint()
+
                 batch_list.append(int(target[0]))
 
         # for i in range(targets.shape[0]):
@@ -293,13 +310,15 @@ class ComputeLoss:
         if tbox:
             tbox = torch.stack(tbox).to(targets.device)
             tbox = [tbox]
+            tcord = torch.stack(tcord).to(targets.device)
+            tcord = [tcord]
         if tcls:
             tcls = torch.stack(tcls).to(targets.device)
             tcls = [tcls]
         indices.append((torch.tensor(batches).long().to(targets.device)))   #, torch.tensor(proposal_idx).to(targets.device)
         #n_indices.append((torch.tensor(n_batches).long().to(targets.device), torch.tensor(n_proposalIdx).to(targets.device)))
         p = torch.cat(p).to(targets.device)
-        return tcls, tbox, indices, p, objectness, thr_match
+        return tcls, tbox, tcord, indices, p, objectness, thr_match
 
 
 

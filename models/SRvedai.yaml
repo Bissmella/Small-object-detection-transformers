@@ -15,7 +15,8 @@
 train: /home/bbahaduri/sryolo/sryolo_data/VEDAIdataset/VEDAI/fold01_write.txt
 test: /home/bbahaduri/sryolo/sryolo_data/VEDAIdataset/VEDAI/fold01test_write.txt
 val: /home/bbahaduri/sryolo/sryolo_data/VEDAIdataset/VEDAI/fold01test_write.txt
-
+#/home/bbahaduri/sryolo/sryolo_data/VEDAIdataset/VEDAI/fold01test_write.txt
+#sryolo/sryolo_data/VEDAIdataset/VEDAI/a_train_test.txt
 # number of classes
 nc: 8
 

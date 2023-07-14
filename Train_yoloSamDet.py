@@ -281,9 +281,9 @@ def train(hyp, opt, device, tb_writer=None):
     # Model parameters
     nl = 1
     hyp['box'] *= 3. / nl  # scale to layers
-    hyp['cls'] *= nc / 80. * 3. / nl  # scale to classes and layers
+    hyp['cls'] *= 120 / 80. * 3. / nl  # scale to classes and layers
 
-    hyp['obj'] *= (128 / 640) ** 2 * 3. / nl  # imgsz  ** 2 scale to image size and layers  
+    hyp['obj'] *= (64/ 640) ** 2 * 3. / nl  # imgsz  ** 2 scale to image size and layers  
     model.nc = nc  # attach number of classes to model
     model.hyp = hyp  # attach hyperparameters to model
     model.gr = 1.0  # iou loss ratio (obj_loss = 1.0 or iou)
@@ -368,7 +368,7 @@ def train(hyp, opt, device, tb_writer=None):
         if rank != -1:
             dataloader.sampler.set_epoch(epoch)
         pbar = enumerate(dataloader)
-        logger.info(('\n' + '%10s' * 9) % ('Epoch', 'gpu_mem', 'box', 'obj', 'cls', 'total', 'labels', 'unmatch','img_size'))
+        logger.info(('\n' + '%10s' * 8) % ('Epoch', 'gpu_mem', 'box', 'obj', 'cls', 'total', 'labels', 'img_size'))
         if rank in [-1, 0]:
             pbar = tqdm(pbar, total=nb)  # progress bar
         optimizer.zero_grad()
@@ -461,6 +461,7 @@ def train(hyp, opt, device, tb_writer=None):
                 '''
                 loss, lbox , lobj , lcls, thr_match  = compute_loss(pred, propos, targets.to(device))  # loss scaled by batch_size
                 loss_items = torch.cat((lbox, lobj, lcls, loss)).detach()
+                #print(thr_match)
                 if opt.super: #and not opt.attention and not opt.super_attention:    
                     if opt.input_mode =='IR':
                         sr_loss = 0.5*torch.nn.L1Loss()(output_sr,ir_image)
@@ -500,8 +501,8 @@ def train(hyp, opt, device, tb_writer=None):
             if rank in [-1, 0]:
                 mloss = (mloss * i + loss_items) / (i + 1)  # update mean losses
                 mem = '%.3gG' % (torch.cuda.memory_reserved() / 1E9 if torch.cuda.is_available() else 0)  # (GB)
-                s = ('%10s' * 2 + '%10.4g' * 7) % (
-                    '%g/%g' % (epoch, epochs - 1), mem, *mloss, targets.shape[0], thr_match, imgs.shape[-1])
+                s = ('%10s' * 2 + '%10.4g' * 6) % (
+                    '%g/%g' % (epoch, epochs - 1), mem, *mloss, targets.shape[0], imgs.shape[-1])    #, thr_match
                 pbar.set_description(s)
 
                 # Plot
@@ -649,7 +650,7 @@ if __name__ == '__main__':
     parser.add_argument('--super', default=False, action='store_true', help='super resolution')
     parser.add_argument('--data', type=str,default='codes/models/SRvedai.yaml', help='data.yaml path')
     parser.add_argument('--hyp', type=str, default='codes/models/hyp.scratch.yaml', help='hyperparameters path')
-    parser.add_argument('--epochs', type=int, default=200)          #*changed default 300
+    parser.add_argument('--epochs', type=int, default=150)          #*changed default 300
     parser.add_argument('--ch_steam', type=int, default=3)
     parser.add_argument('--ch', type=int,default=128, help = '3 4 16 midfusion1:64 midfusion2,3:128 midfusion4:256')  #*changed from default to match SAM
     parser.add_argument('--input_mode', type=str,default='RGB',help ='RGB IR RGB+IR(pixel-level fusion) RGB+IR+fusion(feature-level fusion)')
@@ -664,7 +665,7 @@ if __name__ == '__main__':
     parser.add_argument('--noautoanchor', action='store_true', help='disable autoanchor check')
     parser.add_argument('--evolve', action='store_true', help='evolve hyperparameters')
     parser.add_argument('--bucket', type=str, default='', help='gsutil bucket')
-    parser.add_argument('--cache-images', action='store_true', default = True, help='cache images for faster training')  #* changed
+    parser.add_argument('--cache-images', action='store_true', default = False, help='cache images for faster training')  #* changed
     parser.add_argument('--image-weights', action='store_true', help='use weighted image selection for training')
     parser.add_argument('--device', default='cpu', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
     parser.add_argument('--multi-scale', action='store_true', help='vary img-size +/- 50%%')
