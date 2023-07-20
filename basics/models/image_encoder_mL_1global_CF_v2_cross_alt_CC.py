@@ -22,7 +22,7 @@ class ImageEncoderViT(nn.Module):
         norm_layer: Type[nn.Module] = partial(torch.nn.LayerNorm, eps=1e-6), # nn.LayerNorm,
         act_layer: Type[nn.Module] = nn.GELU,
         use_abs_pos: bool = True,
-        use_rel_pos: bool = False,        #False,
+        use_rel_pos: bool = True,        #False,
         rel_pos_zero_init: bool = True,
         window_size: int = 0,
         global_attn_indexes: Tuple[int, ...] = (), #*changed
@@ -62,8 +62,10 @@ class ImageEncoderViT(nn.Module):
                 torch.zeros(1, img_size // 4, img_size // 4, embed_dim)   #*changed from patch_size to 4   img_size // 4 changed to 160
             )
 
-        self.avg_pool = nn.AdaptiveAvgPool2d((15, 15))
-        self.spec_tokens = nn.Parameter(torch.randn(1, 15, 15, 192))  ##192 is embed dimension
+        self.pos_embedc4 = nn.Parameter(
+            torch.zeros(1, img_size // 4, img_size // 4, 48)
+        )
+
         #for channel attention
         self.channel_embed_r = PatchEmbed(
             kernel_size = (patch_size, patch_size),
@@ -93,20 +95,37 @@ class ImageEncoderViT(nn.Module):
             embed_dim = 48,
         )
         
+        self.c4_blocks  = nn.ModuleList()
+        c4_depth = 3   #depth of c4 blocks
+        for i in range(c4_depth):
+            block = CAttentionBlock(
+                embedding_dim = 48,
+                num_heads = num_heads,
+            )
+            self.c4_blocks.append(block)
+
+        self.c2_blocks = nn.ModuleList()
+        c2_depth = 3
+        for i in range (c2_depth):
+            block = C2AttentionBlock(
+                embedding_dim= 96,
+                num_heads= num_heads
+            )
+
         self.chan_block = CAttentionBlock(
                 embedding_dim = 48,
                 num_heads = num_heads,
             )
             
-
-        #self.fc_layer = nn.Linear(196, 192)
-        #MLPBlock(embedding_dim=192, mlp_dim=384, act=nn.GELU)
+        #TODO following layer is huge and not used
+        ##self.fc_layer = MLPBlock(embedding_dim=192, mlp_dim=384, act=nn.GELU)
         #nn.Linear(192, 192) #removed (img_size //16) *
+
         #local blocks
         self.blocks = nn.ModuleList()
-        window_size = [8, 6, 8, 6, 8, 6, 8, 6, 8, 6, 6]
+        window_size = [13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13]   # lowest common multiple of 7, 9, 11 is 693 much bigger than 128
         padding = [True, False, True, False, True, False, True, False, True, False, True]
-        for i in range(depth):
+        for i in range(8):              #depth only for c1 blocks
             block = Block(
                 dim=embed_dim,
                 num_heads=num_heads,
@@ -116,51 +135,35 @@ class ImageEncoderViT(nn.Module):
                 act_layer=act_layer,
                 use_rel_pos=use_rel_pos,
                 rel_pos_zero_init=rel_pos_zero_init,
-                window_size=9,#window_size[i] if i not in global_attn_indexes else 0,
+                window_size= 11,       #window_size[i],#window_size[i] if i not in global_attn_indexes else 0,
                 top_padding = False,
-                input_size=(img_size // 6, img_size // 6),   #* changed from  // patch_size to 4
+                input_size=(img_size // 13, img_size // 13),   #* changed from  // patch_size to 4
             )
             self.blocks.append(block)
         #a second pathc embedding
-        # self.patch_embed2 = PatchEmbed(
-        #     kernel_size=(4, 4),
-        #     stride=(4,4),
-        #     padding=(0, 0),
-        #     in_chans=192,
-        #     embed_dim=768,
-        # )
+        self.patch_embed2 = PatchEmbed(
+            kernel_size=(4, 4),
+            stride=(4,4),
+            padding=(0, 0),
+            in_chans=192,
+            embed_dim=768,
+        )
         #global attention module
-        self.glob_block = nn.ModuleList()
-        for i in range(depth - 1):
-            block = Block(
-                dim = embed_dim,
-                num_heads = num_heads,
-                mlp_ratio= mlp_ratio,
-                qkv_bias=qkv_bias,
-                norm_layer=norm_layer,
-                act_layer=act_layer,
-                use_rel_pos=use_rel_pos,
-                rel_pos_zero_init=rel_pos_zero_init,
-                window_size=0,
-                input_size=(img_size // 35, img_size // 35),
-            )
-            self.glob_block.append(block)
-            
-        # self.glob_block = Block(
-        #     dim = 768,
-        #     num_heads = num_heads,
-        #     mlp_ratio= mlp_ratio,
-        #     qkv_bias=qkv_bias,
-        #     norm_layer=norm_layer,
-        #     act_layer=act_layer,
-        #     use_rel_pos=use_rel_pos,
-        #     rel_pos_zero_init=rel_pos_zero_init,
-        #     window_size=0,
-        #     input_size=(128 // 4, 128 // 4),
-        # )
+        self.glob_block = Block(
+            dim = 768,
+            num_heads = num_heads,
+            mlp_ratio= mlp_ratio,
+            qkv_bias=qkv_bias,
+            norm_layer=norm_layer,
+            act_layer=act_layer,
+            use_rel_pos=use_rel_pos,
+            rel_pos_zero_init=rel_pos_zero_init,
+            window_size=0,
+            input_size=(128 // 4, 128 // 4),
+        )
         self.neck3 = nn.Sequential(
             nn.Conv2d(
-                embed_dim,
+                768,
                 out_chans,
                 kernel_size=1,
                 bias=False,
@@ -261,92 +264,59 @@ class ImageEncoderViT(nn.Module):
         # x = x.view(bs, h, w, 1, -1).squeeze(3)
         # x = self.fc_layer(x)
 
-        x = self.chan_block(r, g, b, i)
-        x = x.permute(0, 3, 1, 2)
-        x = self.patch_embed(x)
+        #adding position embeddings to each channel separately
+        if self.pos_embedc4 is not None:
+            if r.shape[1] == self.pos_embedc4.shape[1]: #patches before
+                r = r + self.pos_embedc4
+                g = g + self.pos_embedc4
+                b = b + self.pos_embedc4
+                i = i + self.pos_embedc4
+
+        #C4 blocks preferabily with window size of 3
+        for j in range(len(self.c4_blocks)):
+            r, g, b, i = self.c4_blocks[j](r, g, b, i)
         
+        c1 = torch.cat((r,g), dim=-1)
+        c2 = torch.cat((b,i), dim = -1)
+        
+        #TODO add 1 or 2 fully connected for c1 and c2 to pass through for mixing up the r-g and b-i  optional
+
+        #C2 attention blocks with window size of 7
+        for i in range(len(self.c2_blocks)):
+            c1, c2 = self.c2_blocks[i](r, g, b, i, 7)   #7 is the size of window used for window attention
+        x = torch.cat((c1, c2), dim = -1)
+        
+        #TODO potential for 1 fullcy connected layer to mix up c1 and c2
+
+        #breakpoint()
+
+        # x = self.chan_block(r, g, b, i)
+        # x = x.permute(0, 3, 1, 2)
+        # x = self.patch_embed(x)
+
         y = []
         if self.pos_embed is not None:
             if x.shape[1] == self.pos_embed.shape[1]: #patches before
                 x = x + self.pos_embed
         #x = x1 + patches
-        #*x = merge(x, self.spec_tokens)
-        
-        x = x.permute(0, 3, 1, 2)
-        pooled_features = self.avg_pool(x).permute(0, 2, 3, 1)  # Perform average pooling
-        #spec_tokens = pooled_features
-        # if x.shape[0] > 1:
-        #     spec_tokens = nn.Parameter(pooled_features)
-        #     # Register the new_param as a model parameter
-        #     self.register_parameter("spec_tokens", spec_tokens)
-        x = x.permute(0, 2, 3, 1)
-        #breakpoint()
-        spec_tokens = self.spec_tokens.repeat(x.shape[0], 1, 1, 1)
-        spec_tokens[:, :, :, :] = pooled_features
 
-        #3 layers of block attention
-
-
-        # layers of block attention and global attention for spec_token
         for i in range(len(self.blocks)):
-            B, H, W, C = x.shape
-            x, pad_hw, _ = window_partition(x, self.blocks[i].window_size, spec_tokens)  #third output is spec_token but it is not used
-
-            x = self.blocks[i](x, self.blocks[i].window_size, self.blocks[i].window_size)
-
-            x, spec_tokens = window_unpartition(x, self.blocks[i].window_size, pad_hw, (H, W))
-
-            if i in (8, 9, 10):
+            x = self.blocks[i](x)
+            if i in (6, 7):
                 y.append(x)
-            if i == len(self.glob_block):
-                continue
-            else:
-                spec_tokens = spec_tokens.view(x.shape[0], -1, C)
-                spec_tokens = self.glob_block[i](spec_tokens).view(-1, 1, C)
-
-
-        ##prev
-        # for i in range(4):
-        #     x = self.blocks[i](x)
-        #     if i in (9, 10):
-        #         y.append(x)
-        # x, st1, st2 = unmerge(x)
-        # #Todo: 1st layer of global attention
-        # st2 = self.glob_block[0](st2)
-        # x = merge(x, st1, st2)
-
-        # #TODO: next 4 layers of block attention
-        # for i in range(4, 8):
-        #     x = self.blocks[i](x)
-        #     if i in (9, 10):
-        #         y.append(x)
-        # x, st1, st2 = unmerge(x)
-        # st2 = self.glob_block[1](st2)
-        # x = merge(x, st1, st2)
-
-        # #TODO: last 3/-- layers of block attention
-        # for i in range(8, 11):
-        #     x = self.blocks[i](x)
-        #     if i in (8, 9, 10):
-        #         y.append(x)
-        # y[0], _, _ = unmerge(y[0])
-        # y[1], _, _ = unmerge(y[1])
-        # y[2], _, _ = unmerge(y[2])
-
-        # x = x.permute(0, 3, 1, 2)
-        # x = self.patch_embed2(x)
-        # x = self.glob_block(x)
-        ## prev 
-
-
+        x = x.permute(0, 3, 1, 2)
+        x = self.patch_embed2(x)
+        x = self.glob_block(x)
+        y.append(x)
         # for blk in self.blocks:
         #     x = blk(x)
         # x = self.neck(x.permute(0, 3, 1, 2))
-        
+        W = y[0].shape[2]
+        Wg = x.shape[2]
         #y[0] = y[0] + x
         y[0] = self.neck1(y[0].permute(0, 3, 1, 2)) ##[:, :, torch.arange(W) % 5 != 4,:]
         y[1] = self.neck2(y[1].permute(0, 3, 1, 2)) ##[:, :, torch.arange(W) % 5 != 4,:]
-        y[2] = self.neck3(y[2].permute(0, 3, 1, 2))  ##[:, :, torch.arange(Wg) % 5 != 4,:]
+        y[2] =  F.interpolate(self.neck3(y[2].permute(0, 3, 1, 2)), scale_factor=4, mode='bilinear', align_corners=False)  ##[:, :, torch.arange(Wg) % 5 != 4,:]
         #y[0] = y[0] + y[2]
         return y
 
@@ -403,20 +373,19 @@ class Block(nn.Module):
         self.window_size = window_size
         self.top_padding = top_padding
 
-    def forward(self, x: torch.Tensor, H:int=9, W:int=9) -> torch.Tensor:
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         shortcut = x
-
         x = self.norm1(x)
         # Window partition
-        # if self.window_size > 0:
-        #     H, W = x.shape[1], x.shape[2]
+        if self.window_size > 0:
+            H, W = x.shape[1], x.shape[2]
 
-        #     x, pad_hw = window_partition(x, self.window_size, self.top_padding)
+            x, pad_hw = window_partition(x, self.window_size, self.top_padding)
 
-        x = self.attn(x, H, W)
+        x = self.attn(x)
         # Reverse window partition
-        # if self.window_size > 0:
-        #     x = window_unpartition(x, self.window_size, pad_hw, (H, W), self.top_padding)
+        if self.window_size > 0:
+            x = window_unpartition(x, self.window_size, pad_hw, (H, W), self.top_padding)
             
         x = shortcut + x
 
@@ -473,16 +442,12 @@ class Attention(nn.Module):
             self.rel_pos_h = nn.Parameter(torch.zeros(2 * input_size[0] - 1, head_dim))
             self.rel_pos_w = nn.Parameter(torch.zeros(2 * input_size[1] - 1, head_dim))
 
-    def forward(self, x: torch.Tensor, H:int, W:int) -> torch.Tensor:
-        #*B, H, W, _ = x.shape
-
-        B, HW, _ = x.shape
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        B, H, W, _ = x.shape
         # qkv with shape (3, B, nHead, H * W, C)
-        #*qkv = self.qkv(x).reshape(B, H * W, 3, self.num_heads, -1).permute(2, 0, 3, 1, 4)
-        qkv = self.qkv(x).reshape(B, HW, 3, self.num_heads, -1).permute(2, 0, 3, 1, 4)
+        qkv = self.qkv(x).reshape(B, H * W, 3, self.num_heads, -1).permute(2, 0, 3, 1, 4)
         # q, k, v with shape (B * nHead, H * W, C)
-        #*q, k, v = qkv.reshape(3, B * self.num_heads, H * W, -1).unbind(0)
-        q, k, v = qkv.reshape(3, B * self.num_heads, HW, -1).unbind(0)
+        q, k, v = qkv.reshape(3, B * self.num_heads, H * W, -1).unbind(0)
 
         attn = (q * self.scale) @ k.transpose(-2, -1)
 
@@ -490,8 +455,7 @@ class Attention(nn.Module):
             attn = add_decomposed_rel_pos(attn, q, self.rel_pos_h, self.rel_pos_w, (H, W), (H, W))
 
         attn = attn.softmax(dim=-1)
-        #x = (attn @ v).view(B, self.num_heads, H, W, -1).permute(0, 2, 3, 1, 4).reshape(B, H, W, -1)
-        x = (attn @ v).view(B, self.num_heads, HW, -1).permute(0, 2,1, 3).reshape(B, HW, -1)
+        x = (attn @ v).view(B, self.num_heads, H, W, -1).permute(0, 2, 3, 1, 4).reshape(B, H, W, -1)
         x = self.proj(x)
 
         return x
@@ -507,7 +471,7 @@ class CAttentionBlock(nn.Module):
         skip_pe: bool = True,
         ) -> None:
         '''
-        transformer block for calculating intra channel attention
+        transformer block for calculating intra channel attention for 4 channels
         '''
 
         super().__init__()
@@ -531,12 +495,12 @@ class CAttentionBlock(nn.Module):
         # self.mlp = MLPBlock(out_dim, 256, activation)
         # self.norm5 = nn.LayerNorm(out_dim)
 
-    def forward(self, r: torch.Tensor, g: torch.Tensor, b: torch.Tensor, ir: torch.Tensor):
+    def forward(self, r: torch.Tensor, g: torch.Tensor, b: torch.Tensor, ir: torch.Tensor, window_size:int = 2):
         b1, h, w, c = r.shape
-        r, r_hw =window_partition(r, 2)
-        g, g_hw = window_partition(g, 2)
-        b, b_hw = window_partition(b, 2)
-        ir, ir_hw = window_partition(ir, 2)
+        r, r_hw =window_partition(r, window_size)
+        g, g_hw = window_partition(g, window_size)
+        b, b_hw = window_partition(b, window_size)
+        ir, ir_hw = window_partition(ir, window_size)
         b2, h2, w2, c2 = r.shape
         r = r.reshape(b2, h2 * w2, c2)
         g = g.reshape(b2, h2 * w2, c2)
@@ -566,16 +530,86 @@ class CAttentionBlock(nn.Module):
         x3 = x3.view(b2, h2, w2, c2)
         x4 = x4.view(b2, h2, w2, c2)
 
-        x1 = window_unpartition(x1, 2, r_hw, (h, w))
-        x2 = window_unpartition(x2, 2, g_hw, (h, w))
-        x3 = window_unpartition(x3, 2, b_hw, (h, w))
-        x4 = window_unpartition(x4, 2, ir_hw, (h, w))
+
+        x1 = window_unpartition(x1, window_size, r_hw, (h, w))
+        x2 = window_unpartition(x2, window_size, g_hw, (h, w))
+        x3 = window_unpartition(x3, window_size, b_hw, (h, w))
+        x4 = window_unpartition(x4, window_size, ir_hw, (h, w))
         x = torch.cat((x1, x2, x3, x4), dim=-1)
         # x = self.fc_layer(x)
         # #x = self.dropout(x)
         # x = self.mlp(x)
         # x = self.norm5(x)
-        return x
+        return x1, x2, x3, x4
+
+
+
+
+class C2AttentionBlock(nn.Module):
+    def __init__(
+        self,
+        embedding_dim: int,
+        num_heads: int,
+        out_dim: int = 192,
+        activation: Type[nn.Module] = nn.ReLU,
+        skip_pe: bool = True,
+        ) -> None:
+        '''
+        transformer block for calculating intra channel attention for 2 channels
+        '''
+
+        super().__init__()
+
+
+        self.c12c2_attn = CAttention(embedding_dim, num_heads)
+        self.norm1 = nn.LayerNorm(embedding_dim)
+
+        self.c22c1_attn = CAttention(embedding_dim, num_heads)
+        self.norm2 = nn.LayerNorm(embedding_dim)
+
+
+        # self.rgb2ir_attn = CAttention(embedding_dim, num_heads)
+        # self.norm3 = nn.LayerNorm(embedding_dim)
+
+        # self.ir2rgb_attn = CAttention(embedding_dim, num_heads)
+        # self.norm4 = nn.LayerNorm(embedding_dim)
+        
+       
+
+    def forward(self, c1: torch.Tensor, c2: torch.Tensor, window_size:int):
+        b1, h, w, c = r.shape
+        r, r_hw =window_partition(c1, window_size)
+        g, g_hw = window_partition(c2, window_size)
+        
+        b2, h2, w2, c2 = r.shape
+        r = r.reshape(b2, h2 * w2, c2)
+        g = g.reshape(b2, h2 * w2, c2)
+
+
+        attn_out = self.r2g_attn(q = r, k =g, v =g)
+        x1 = r + attn_out
+        x1 = self.norm1(x1)
+
+        attn_out = self.rg2b_attn(q = g, k =r, v =r)
+        x2 = g + attn_out
+        x2 = self.norm2(x2)
+
+
+        x1 = x1.view(b2, h2, w2, c2)
+        x2 = x2.view(b2, h2, w2, c2)
+
+        x1 = window_unpartition(x1, window_size, r_hw, (h, w))
+        x2 = window_unpartition(x2, window_size, g_hw, (h, w))
+
+        x = torch.cat((x1, x2), dim=-1)
+        # x = self.fc_layer(x)
+        # #x = self.dropout(x)
+        # x = self.mlp(x)
+        # x = self.norm5(x)
+        return x1, x2
+
+
+
 
 class CAttention(nn.Module):
     """attention layer allowing cross attention used for channels"""
@@ -618,7 +652,7 @@ class CAttention(nn.Module):
         return out
 
 
-def window_partition(x: torch.Tensor, window_size: int, special_token:torch.tensor = None, top_padding: bool = False) -> Tuple[torch.Tensor, Tuple[int, int]]:
+def window_partition(x: torch.Tensor, window_size: int, top_padding: bool = False) -> Tuple[torch.Tensor, Tuple[int, int]]:
     """
     Partition into non-overlapping windows with padding if needed.
     Args:
@@ -630,19 +664,9 @@ def window_partition(x: torch.Tensor, window_size: int, special_token:torch.tens
         (Hp, Wp): padded height and width before partition
     """
     B, H, W, C = x.shape
-    if window_size ==2:
-        wh =2
-        ww = 2
-    if window_size == 8:
-        wh =8
-        ww =9
-
 
     pad_h = (window_size - H % window_size) % window_size
     pad_w = (window_size - W % window_size) % window_size
-
-
-
     if pad_h > 0 or pad_w > 0:
         if top_padding:
             x = F.pad(x, (0, 0, pad_w, 0, pad_h, 0))
@@ -652,21 +676,7 @@ def window_partition(x: torch.Tensor, window_size: int, special_token:torch.tens
 
     x = x.view(B, Hp // window_size, window_size, Wp // window_size, window_size, C)
     windows = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(-1, window_size, window_size, C)
-    #converting height and width to one dimension
-    if special_token != None:
-        windows = windows.view(-1, window_size * window_size, C) 
-        #adding special token
-
-        special_token = special_token.view(-1, 1, C)
-
-        if windows.shape[0] != special_token.shape[0]:
-            special_token = special_token[:windows.shape[0], :, :]
-        windows = torch.cat((windows, special_token), dim= 1)  #dim 1 should become (window_size * window_size) + 1
-    if window_size == 2:
-        return windows, (Hp, Wp)
-    else:
-        return windows, (Hp, Wp), special_token
-        
+    return windows, (Hp, Wp)
 
 
 def window_unpartition(
@@ -683,20 +693,6 @@ def window_unpartition(
     Returns:
         x: unpartitioned sequences with [B, H, W, C].
     """
-    if window_size ==2:
-        wh = 2
-        ww = 2
-    if window_size == 9:
-        _, _, C = windows.shape
-        wh =8
-        ww = 9
-        if windows.shape[1] > window_size * window_size :
-            special_token = windows[:, -1:, :].clone()
-            windows = windows[:, :-1, :]
-            windows = windows.view(-1, window_size, window_size, C)
-        else:
-            special_token = None
-
     Hp, Wp = pad_hw
     H, W = hw
     B = windows.shape[0] // (Hp * Wp // window_size // window_size)
@@ -708,11 +704,8 @@ def window_unpartition(
             x = x[:, -H:, -W:, :].contiguous()
         else:
             x = x[:, :H, :W, :].contiguous()
-    if window_size == 2:
-        return x
-    else:
-        return x, special_token
 
+    return x
 
 def get_rel_pos(q_size: int, k_size: int, rel_pos: torch.Tensor) -> torch.Tensor:
     """
@@ -772,21 +765,14 @@ def add_decomposed_rel_pos(
     Rw = get_rel_pos(q_w, k_w, rel_pos_w)
 
     B, _, dim = q.shape
-
     r_q = q.reshape(B, q_h, q_w, dim)
     rel_h = torch.einsum("bhwc,hkc->bhwk", r_q, Rh)
     rel_w = torch.einsum("bhwc,wkc->bhwk", r_q, Rw)
 
-    #reshaping input and putting back the h and w dims
-    b, hw, _ = attn.shape
-
-    attn = attn.view(b, q_size[0], q_size[1], -1)
     attn = (
         attn.view(B, q_h, q_w, k_h, k_w) + rel_h[:, :, :, :, None] + rel_w[:, :, :, None, :]
     ).view(B, q_h * q_w, k_h * k_w)
 
-    #merging back the hw dims
-    attn = attn.view(b, hw, -1)
     return attn
 
 class PatchEmbed(nn.Module):
@@ -868,38 +854,4 @@ def get_channels(x):
     i = x[:,3,:,:].unsqueeze(1)#.index_select(1, idx)#.detach()#[:,3,:,:].unsqueeze(1)
     return r, g, b, i
 
-def merge(x, spec_tokens, spec_tokens2 = None):
-    b, h, w, d = x.shape
 
-    if spec_tokens2 != None:
-        ws = spec_tokens2.shape[2]
-        spec_tokens2 = spec_tokens2.view(b, -1, 1, ws, d)
-        spec_tokens = torch.cat((spec_tokens, spec_tokens2), dim=2)    # 15 + 1 should be the dimensions of spec_tokens and spec_tokens2
-
-    #if spec_tokens.shape[0] != b:
-    else:
-        spec_tokens = spec_tokens.repeat(1, h, 1, 1)
-        spec_tokens = spec_tokens.repeat(b, 1, 1, 1)
-
-    x = x.reshape(b, h, -1, 8, 192)
-    spec_tokens = spec_tokens.view(b, h, -1, 1, d)
-    if x.shape[2] != spec_tokens.shape[2]:
-            spec_tokens = spec_tokens[:, :, :x.shape[2], :, :]
-    x = torch.cat((x, spec_tokens), dim=3)
-    x = x.reshape(b, h, -1, d)
-    return x
-
-def unmerge(x):
-    b, h, w, d = x.shape
-    x = x.view(b, h, -1, 9, d)  # 16 * 9 = 144   16 column-blocks of 9 patches each
-    spec_tokens = x[:, :, :, -1:, :]
-    x = x[:, :, :, :8, :]   # getting the first 8 related to image
-    x = x.reshape(b, h, -1, d)
-    spec_tokens = spec_tokens.squeeze(3)
-    bs, hs, ws, ds = spec_tokens.shape
-    spec_tokens = spec_tokens.view(bs, hs // 8, -1, ws, ds)
-    spec_tokens1 = spec_tokens[:, :, :-1, :, :]  #all others except the last one
-    spec_tokens2 = spec_tokens[:, :, -1:, :, :]  #just the last one
-    spec_tokens2 = spec_tokens2.view(b, -1, ws, ds)
-
-    return x, spec_tokens1, spec_tokens2

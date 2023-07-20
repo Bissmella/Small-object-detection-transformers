@@ -34,7 +34,7 @@ from tqdm import tqdm
 # import test_up  # import test.py to get mAP after each epoch
 from basics.test import test
 from basics.models.experimental import attempt_load
-from basics.models.SRyolo_multiL_glob_CF_v2_cross_alt import Model #zjq
+from basics.models.SRyolo_multiL_glob_CF_v2_cross_alt_CC import Model #zjq
 from basics.utils.autoanchor import check_anchors
 
 
@@ -632,7 +632,7 @@ if __name__ == '__main__':
     parser.add_argument('--test_img_size', type=int, default=512, help='test image sizes')
     parser.add_argument('--hr_input', default=True,action='store_true', help='high resolution input(1024*1024)') #if use SR,please set True
     parser.add_argument('--rect', action='store_true', help='rectangular training')
-    parser.add_argument('--resume', nargs='?', const=True, default=True, help='resume most recent training')
+    parser.add_argument('--resume', nargs='?', const=True, default=False, help='resume most recent training')
     parser.add_argument('--nosave', action='store_true', help='only save final checkpoint')
     parser.add_argument('--notest', action='store_true', help='only test final epoch')
     parser.add_argument('--noautoanchor', action='store_true', help='disable autoanchor check')
@@ -647,7 +647,7 @@ if __name__ == '__main__':
     parser.add_argument('--sync-bn', action='store_true', help='use SyncBatchNorm, only available in DDP mode')
     parser.add_argument('--local_rank', type=int, default=-1, help='DDP parameter, do not modify')
     parser.add_argument('--workers', type=int, default=4, help='maximum number of dataloader workers')
-    parser.add_argument('--project', default='outputs_SAM/yoloSAM_v2_p6_multiL_RGBIR_glob_CF_v2_cross_alt/run/train', help='save to project/name')
+    parser.add_argument('--project', default='outputs_SAM/yoloSAM_v2_p6_multiL_RGBIR_glob_CF_v2_cross_alt_CC/run/train', help='save to project/name')
     parser.add_argument('--entity', default=None, help='W&B entity')
     parser.add_argument('--name', default='exp', help='save to project/name')
     parser.add_argument('--exist-ok', action='store_true', help='existing project/name ok, do not increment')
@@ -674,7 +674,7 @@ if __name__ == '__main__':
     # Resume
     wandb_run = check_wandb_resume(opt)
     if opt.resume and not wandb_run:  # resume an interrupted run
-        ckpt = opt.resume if isinstance(opt.resume, str) else get_latest_run("/home/bbahaduri/sryolo/outputs_SAM/yoloSAM_v2_p6_multiL_RGBIR_glob_CF_v2_cross_alt/run/train/exp23/weights")  # specified or most recent path
+        ckpt = opt.resume if isinstance(opt.resume, str) else get_latest_run()  # specified or most recent path
         assert os.path.isfile(ckpt), 'ERROR: --resume checkpoint does not exist'
         apriori = opt.global_rank, opt.local_rank
         with open(Path(ckpt).parent.parent / 'opt.yaml') as f:

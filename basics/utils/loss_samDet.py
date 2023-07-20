@@ -200,14 +200,20 @@ class ComputeLoss:
         '''
         changed from original build_targets
         inputs:
-            -p: prposals not predictiosn, in shape of b x n x 4 or n x 5
+            -p: prposals not predictiosn, in shape of b x n x 4 or n x 5 (an additional showing batch number)
             -targets (image, class, x,y,w,h)
+            -batch_size: batch size
         outputs:
             -indices: list of tuples including tensors one for batch index / image id, and another for
             proposal index. used to get proposal specific for subsequent tbox and tcls
             -tbox: list of tensors including difference xywh of each ground truth from corresponding
             proposal
             -tcls: list of tensors including class values corresponding to relevant tbox
+            -tcord: list of tensors including the curated xywh coordinates for positive proposals
+            -indices: list of tensor including the index number of positive proposal
+            -p: proposals in n X 4 format
+            -objectness: is an experimental list of tensor including all proposal indexes inlcuding 1 for positive 0 for negative and -1 for ignored proposals
+            -thr_match: number of proposals that matched the targets based on iou threshold
         '''
         #p should be the output of SAM; we match it with the targets having shape of [batch, x, y, w, h]
         #assum p is output of SAM
@@ -234,10 +240,12 @@ class ComputeLoss:
         tbox = []
         tcord = []
         tcls = []  #8 is the number of classes
+        # list including all positive proposals index
         batches =[]
         proposal_idx = []
         n_batches = []
         n_proposalIdx = []
+        #Integer tracker to track up to which index in proposals have been processed to create tensors of n x 1 for batches
         indx_tracker = 0 
         #list to track which batche's targets count has been added to indx_tracker
         batch_list = []
@@ -257,14 +265,13 @@ class ComputeLoss:
                 p_taken = preds[iou_index] == 1
                 tar_taken = tars[i] == 1
                 if not p_taken and not tar_taken:
-                    #preds[int(target[0]), iou_index] = 1    #proposal taken
-                    #tars[i] = 1             #target has a proposal
-                    #breakpoint()
+                    
                     if iou_p[iou_index] > 0.5:
                         thr_match = thr_match + 1
                     #tbox[iou_index][0] = 1  #objectness
                         preds[iou_index] = 1    #proposal taken
                         tars[i] = 1             #target has a proposal
+                        #attaching ground truth xywh to proposals
                         xy = [target[2] , target[3]]  #  - p[int(target[0]), iou_index, 1]   - p[int(target[0]), iou_index, 2]  - p[1]difference of ground-truth and proposal xy
                         wh = [target[4], target[5]] #   - p[int(target[0]), iou_index, 3] - p[int(target[0]), iou_index, 4] - p[2] - p[3] difference of ground-truth and porposal wh
                         x_coord = [(target[2] - p[int(target[0])][iou_index, 0])/p[int(target[0])][iou_index, 2]]
@@ -277,7 +284,7 @@ class ComputeLoss:
                         batches.append(indx_tracker + iou_index)   #batch index / image id
 
                         objectness[indx_tracker + iou_index] = 1
-                        #breakpoint()
+
                         box = torch.cat((torch.tensor(xy), torch.tensor(wh)))
                         box_coord = torch.cat((torch.tensor(x_coord), torch.tensor(y_coord), torch.tensor(w_coord), torch.tensor(h_coord)))
                         tbox.append(box)
