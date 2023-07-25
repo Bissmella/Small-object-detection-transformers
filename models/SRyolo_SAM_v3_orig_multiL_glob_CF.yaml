@@ -45,6 +45,7 @@ backbone:
    ##[-1, 1, Conv, [1024, 3, 2]],  # 7-P5/32
    ##[-1, 1, SPP, [1024, [5, 9, 13]]],
    ##[-1, 3, C3, [1024, False]],  # 9
+   [-1, 1, MF, [3]],  #** adding for sryolo MF
    [-1, 1, ImageEncoderViT, [512, 6, 192, 4, 256, 4]] ##img_size (changes to 512 in sryolo), patch_size, embed_dim, in_chans, out_chans, window_size
   ]
 

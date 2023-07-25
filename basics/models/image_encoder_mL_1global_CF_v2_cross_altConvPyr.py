@@ -52,14 +52,14 @@ class ImageEncoderViT(nn.Module):
             stride=(1, 1),         #* previoulsy 4  changed from patch_size, patch_size to 8, 8 to get half-overlapping 64 x 64 dimension patches
             padding = (0, 0),
             in_chans=144,
-            embed_dim=96,#*embed_dim,
+            embed_dim=144,
         )
 
         self.pos_embed: Optional[nn.Parameter] = None
         if use_abs_pos:
             # Initialize absolute positional embedding with pretrain image size.
             self.pos_embed = nn.Parameter(
-                torch.zeros(1, img_size // 4, img_size // 4, 96)   #*changed from patch_size to 4   img_size // 4 changed to 160
+                torch.zeros(1, img_size // 4, img_size // 4, 144)   #*changed from patch_size to 4   img_size // 4 changed to 160
             )
 
         #for channel attention
@@ -96,12 +96,10 @@ class ImageEncoderViT(nn.Module):
                 num_heads = num_heads,
             )
             
-
-        #*self.fc_layer = MLPBlock(embedding_dim=192, mlp_dim=384, act=nn.GELU)
-        #self.fc_layer = nn.Linear(192, 96)
+        '''previous code
+        self.fc_layer = MLPBlock(embedding_dim=192, mlp_dim=384, act=nn.GELU)
         #nn.Linear(192, 192) #removed (img_size //16) *
         #local blocks
-        '''
         self.blocks = nn.ModuleList()
         window_size = [13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13]   # lowest common multiple of 7, 9, 11 is 693 much bigger than 128
         padding = [True, False, True, False, True, False, True, False, True, False, True]
@@ -121,11 +119,12 @@ class ImageEncoderViT(nn.Module):
             )
             self.blocks.append(block)
         '''
-        #Stage 1
+        #stage1
+        window_sizes = [7, 7, 9, 9, 11, 11]
         self.stage1 = nn.ModuleList()
-        for i in range(2):
+        for i in range(6):
             block = Block(
-                dim=96,    #embed_dim,
+                dim=144,    #embed_dim,
                 num_heads=num_heads,
                 mlp_ratio=mlp_ratio,
                 qkv_bias=qkv_bias,
@@ -139,29 +138,11 @@ class ImageEncoderViT(nn.Module):
 
             )
             self.stage1.append(block)
-        self.pmerging1 = PatchMerging((128, 128), 96)
-        #stage 2
-        self.stage2 = nn.ModuleList()
-        for i in range(6):
-            block = Block(
-                dim=192,
-                num_heads=num_heads,
-                mlp_ratio=mlp_ratio,
-                qkv_bias=qkv_bias,
-                norm_layer=norm_layer,
-                act_layer=act_layer,
-                use_rel_pos=use_rel_pos,
-                rel_pos_zero_init=rel_pos_zero_init,
-                window_size=16,#window_size[i] if i not in global_attn_indexes else 0,
-                top_padding = False,
-                input_size=(img_size // 8, img_size // 8),
+        self.pmerging1 = PatchMerging((128, 128), 144, 384)
+        #stage2
 
-            )
-            self.stage2.append(block)
-        self.pmerging2 = PatchMerging((64, 64), 192)
-        #stage 3
-        self.stage3 = nn.ModuleList()
-        for i in range(2):
+        self.stage2 = nn.ModuleList()
+        for i in range(4):
             block = Block(
                 dim=384,
                 num_heads=num_heads,
@@ -171,16 +152,16 @@ class ImageEncoderViT(nn.Module):
                 act_layer=act_layer,
                 use_rel_pos=use_rel_pos,
                 rel_pos_zero_init=rel_pos_zero_init,
-                window_size=16,#window_size[i] if i not in global_attn_indexes else 0,
+                window_size=8,#window_size[i] if i not in global_attn_indexes else 0,
                 top_padding = False,
-                input_size=(img_size // 16, img_size // 16),
+                input_size=(img_size // 8, img_size // 8),
 
             )
-            self.stage3.append(block)
-        self.pmerging3 = PatchMerging((32, 32), 384)
-        #stage 4
-        self.stage4 = nn.ModuleList()
-        for i in range(2):
+            self.stage2.append(block)
+        self.pmerging2 = PatchMerging((64, 64), 384, 768)
+        #stage3
+        self.stage3 = nn.ModuleList()
+        for i in range(1):
             block = Block(
                 dim=768,
                 num_heads=num_heads,
@@ -192,13 +173,13 @@ class ImageEncoderViT(nn.Module):
                 rel_pos_zero_init=rel_pos_zero_init,
                 window_size=0,#window_size[i] if i not in global_attn_indexes else 0,
                 top_padding = False,
-                input_size=(img_size // 32, img_size // 32),
+                input_size=(img_size // 16, img_size // 16),
 
             )
-            self.stage4.append(block)
-        #self.pmerging4 = PatchMerging((128, 128), 48)
-        #a second pathc embedding
-        '''
+            self.stage3.append(block)
+
+        #a second patch embedding
+        '''previous modules
         self.patch_embed2 = PatchEmbed(
             kernel_size=(4, 4),
             stride=(4,4),
@@ -206,7 +187,6 @@ class ImageEncoderViT(nn.Module):
             in_chans=192,
             embed_dim=768,
         )
-        
         #global attention module
         self.glob_block = Block(
             dim = 768,
@@ -220,63 +200,63 @@ class ImageEncoderViT(nn.Module):
             window_size=0,
             input_size=(128 // 4, 128 // 4),
         )
-        #***
         '''
         self.neck3 = nn.Sequential(
             nn.Conv2d(
                 768,
-                480,
+                128,
                 kernel_size=1,
                 bias=False,
             ),
-            LayerNorm2d(480),
+            LayerNorm2d(128),
             nn.Conv2d(
-                480,
-                480,
+                128,
+                128,
                 kernel_size=3,
                 padding=1,
                 bias=False,
             ),
-            LayerNorm2d(480),
+            LayerNorm2d(128),
         )
-        '''
-        necks before
+
         self.neck2 = nn.Sequential(
             nn.Conv2d(
-                192,
-                out_chans,
+                384,
+                256,
                 kernel_size=1,
                 bias=False,
             ),
-            LayerNorm2d(out_chans),
+            LayerNorm2d(256),
             nn.Conv2d(
-                out_chans,
-                out_chans,
+                256,
+                256,
                 kernel_size=3,
                 padding=1,
                 bias=False,
             ),
-            LayerNorm2d(out_chans),
+            LayerNorm2d(256),
         )
 
         self.neck1 = nn.Sequential(
             nn.Conv2d(
-                96,
-                out_chans,
+                144,
+                384,
                 kernel_size=1,
                 bias=False,
             ),
-            LayerNorm2d(out_chans),
+            LayerNorm2d(384),
             nn.Conv2d(
-                out_chans,
-                out_chans,
+                384,
+                384,
                 kernel_size=3,
                 padding=1,
                 bias=False,
             ),
-            LayerNorm2d(out_chans),
+            LayerNorm2d(384),
         )
-        '''
+
+        self.upsampe2 = nn.Upsample(scale_factor=2, mode= "bilinear")
+        self.upsampe4 = nn.Upsample(scale_factor=4, mode="bilinear")
     '''
     def fuse_chan(self, x: torch.Tensor):
         if x.shape[2] != 512:
@@ -331,22 +311,24 @@ class ImageEncoderViT(nn.Module):
         x = x.permute(0, 3, 1, 2)
         x = self.patch_embed(x)
 
-        bs, h, w, c = x.shape
         y = []
         if self.pos_embed is not None:
             if x.shape[1] == self.pos_embed.shape[1]: #patches before
                 x = x + self.pos_embed
         #x = x1 + patches
+        
 
         for i in range(len(self.stage1)):
             x = self.stage1[i](x)
+
         y.append(x)
+        bs, h, w, c = x.shape
         x = x.view(bs, h * w, c)
         x = self.pmerging1(x, (h, w))
 
-
         x = x.view(bs, h//2, w//2, -1)
 
+        #stage2
         for i in range(len(self.stage2)):
             x = self.stage2[i](x)
         y.append(x)
@@ -356,21 +338,13 @@ class ImageEncoderViT(nn.Module):
 
         x = x.view(bs, h//2, w//2, -1)
 
+        #stage3
         for i in range(len(self.stage3)):
             x = self.stage3[i](x)
-        #y.append(x)
-        bs, h, w, c = x.shape
-        x = x.view(bs, h * w, c)
-        x = self.pmerging3(x, (h, w))
-
-        x = x.view(bs, h//2, w//2, -1)
-
-        for i in range(len(self.stage4)):
-            x = self.stage4[i](x)
         y.append(x)
-        #x = self.pmerging4(x)
-        '''
-        ****before without pyramid****
+
+
+        '''previous codes
         for i in range(len(self.blocks)):
             x = self.blocks[i](x)
             if i in (9, 10):
@@ -386,11 +360,10 @@ class ImageEncoderViT(nn.Module):
         W = y[0].shape[2]
         Wg = x.shape[2]
         #y[0] = y[0] + x
-        y[0] = y[0].permute(0, 3, 1, 2) ##[:, :, torch.arange(W) % 5 != 4,:]
-        y[1] = F.interpolate(y[1].permute(0, 3, 1, 2), scale_factor=2, mode='bilinear', align_corners=False) ##[:, :, torch.arange(W) % 5 != 4,:]
-        y[2] =  F.interpolate(self.neck3(y[2].permute(0, 3, 1, 2)), scale_factor=8, mode='bilinear', align_corners=False)  ##[:, :, torch.arange(Wg) % 5 != 4,:]
+        y[0] = self.neck1(y[0].permute(0, 3, 1, 2)) ##[:, :, torch.arange(W) % 5 != 4,:]
+        y[1] = self.upsampe2(self.neck2(y[1].permute(0, 3, 1, 2))) ##[:, :, torch.arange(W) % 5 != 4,:]
+        y[2] =  self.upsampe4(self.neck3(y[2].permute(0, 3, 1, 2)))  ##[:, :, torch.arange(Wg) % 5 != 4,:]
         #y[0] = y[0] + y[2]
-
         return y
 
 class Block(nn.Module):
@@ -437,12 +410,12 @@ class Block(nn.Module):
         )
 
         self.norm2 = norm_layer(dim)
-        self.mlp = MLPBlock(embedding_dim=dim, mlp_dim=int(dim * mlp_ratio), act=act_layer)
-        # self.lin1 = nn.Linear(dim, dim)
-        # self.conv1 = nn.Conv2d(dim , dim, 2)
-        # self.gelu = nn.GELU()
-        # self.conv2 = nn.Conv2d(dim, dim, 2)
-        # self.lin2 = nn.Linear(dim, dim)
+        #self.mlp = MLPBlock(embedding_dim=dim, mlp_dim=int(dim * mlp_ratio), act=act_layer)
+        self.lin1 = nn.Linear(dim, dim)
+        self.conv1 = nn.Conv2d(dim , dim, 2)
+        self.gelu = nn.GELU()
+        #self.conv2 = nn.Conv2d(dim, dim, 2)
+        self.lin2 = nn.Linear(dim, dim)
         self.window_size = window_size
         self.top_padding = top_padding
 
@@ -462,18 +435,18 @@ class Block(nn.Module):
             
         x = shortcut + x
 
-        #nshortcut = x
-        # x= self.lin1(self.norm2(x))
-        # x = x.permute(0, 3, 1, 2)
-        # x = F.pad(x, (0, 1, 0, 1))
-        # x = self.conv1(x)
-        # x = F.pad(x, (0, 1, 0, 1))
-        # x = self.gelu(x)
-        # x = self.conv2(x)
-        # x = x.permute(0, 2, 3, 1)
-        # x = self.lin2(x)
-        # x = x + nshortcut
-        x = x + self.mlp(self.norm2(x))
+        nshortcut = x
+        x= self.lin1(self.norm2(x))
+        x = x.permute(0, 3, 1, 2)
+        x = F.pad(x, (0, 1, 0, 1))
+        x = self.conv1(x)
+        #x = F.pad(x, (0, 1, 0, 1))
+        x = self.gelu(x)
+        #x = self.conv2(x)
+        x = x.permute(0, 2, 3, 1)
+        x = self.lin2(x)
+        x = x + nshortcut
+        #x = x + self.mlp(self.norm2(x))
         return x
 
 class Attention(nn.Module):
@@ -858,7 +831,6 @@ def get_channels(x):
     return r, g, b, i
 
 
-
 class PatchMerging(nn.Module):
     r""" Patch Merging Layer.
 
@@ -868,12 +840,12 @@ class PatchMerging(nn.Module):
         norm_layer (nn.Module, optional): Normalization layer.  Default: nn.LayerNorm
     """
 
-    def __init__(self, input_resolution, dim, norm_layer=nn.LayerNorm):
+    def __init__(self, input_resolution, dim, odim, norm_layer=nn.LayerNorm):
         super().__init__()
         self.input_resolution = input_resolution
         self.dim = dim
-        self.reduction = nn.Linear(4 * dim, 2 * dim, bias=False)
-        self.norm = norm_layer(2 * dim)
+        self.reduction = nn.Linear(4 * dim, odim, bias=False)
+        self.norm = norm_layer(odim)
 
     def forward(self, x, input_resolution):
         """
@@ -897,3 +869,4 @@ class PatchMerging(nn.Module):
         x = self.norm(x)
 
         return x
+

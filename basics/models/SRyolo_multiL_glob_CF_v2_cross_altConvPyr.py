@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 from .common import *
 # from models.swin_transformer import *
 from .experimental import *
-from .image_encoder_mL_1global_CF_v2_cross_alt_CC import *
+from .image_encoder_mL_1global_CF_v2_cross_altConvPyr import *
 # from models.edsr import EDSR
 from ..utils.autoanchor import check_anchor_order
 from ..utils.general import make_divisible, check_file, set_logging
@@ -126,7 +126,8 @@ class Model(nn.Module):
         if isinstance(m, Detect):
             s = 256  # 2x min stride
             #m.stride = torch.tensor([s / x.shape[-2] for x in self.forward(torch.zeros(1, ch_steam, s, s),torch.zeros(1, ch_steam, s, s),input_mode)[0]])  # forward
-            m.stride = torch.tensor([4.])#([s / x.shape[-2] for x in self.forward(torch.zeros(1, ch_steam, s, s),torch.zeros(1, ch_steam, s, s),input_mode)[0]])  # forward
+            m.stride = torch.tensor([s / x.shape[-2] for x in self.forward(torch.zeros(1, ch_steam, s, s),torch.zeros(1, ch_steam, s, s),input_mode)[0]])  # forward
+            breakpoint()
             m.anchors /= m.stride.view(-1, 1, 1)
             check_anchor_order(m)
             self.stride = m.stride
@@ -240,7 +241,6 @@ class Model(nn.Module):
                          _ = m(x)
                      dt.append((time_synchronized() - t) * 100)
                      print('%10.1f%10.0f%10.1fms %-40s' % (o, m.np, dt[-1], m.type))
-
             x = self.image_encoder(x)
             y.extend(x)
             '''
@@ -419,10 +419,7 @@ def parse_model(d, string, ch,config):  # model_dict, input_channels(3)
             c2 = ch[f if f < 0 else f + 1]
 
         if string == 'backbone':
-            if m == MF:
-                m_ = nn.Sequential(*[m(*args) for _ in range(n)]) if n > 1 else m(*args)
-            else:
-                m_ = m(img_size = args[0], patch_size=4, embed_dim= args[2], in_chans= args[3], out_chans=args[4], window_size= args[5])
+            m_ = m(img_size = args[0], patch_size=4, embed_dim= args[2], in_chans= args[3], out_chans=args[4], window_size= args[5])
         else:
             m_ = nn.Sequential(*[m(*args) for _ in range(n)]) if n > 1 else m(*args)  # module
         t = str(m)[8:-2].replace('__main__.', '')  # module type
@@ -433,7 +430,7 @@ def parse_model(d, string, ch,config):  # model_dict, input_channels(3)
         layers.append(m_)
         ch.append(c2)
     if string == 'backbone':
-        return nn.Sequential(*layers), sorted(save)#**layers[0], sorted(save) #*changed  nn.Sequential(*layers) to layers[0]
+        return layers[0], sorted(save) #*changed  nn.Sequential(*layers) to layers[0]
     return nn.Sequential(*layers), sorted(save)
 
 # if __name__ == '__main__':

@@ -6,6 +6,7 @@ import math
 from typing import Optional, Tuple, Type
 from functools import partial
 from .SAM_commons import MLPBlock, LayerNorm2d
+from timm.models.layers import DropPath, to_2tuple, trunc_normal_
 
 class ImageEncoderViT(nn.Module):
     def __init__(
@@ -48,10 +49,10 @@ class ImageEncoderViT(nn.Module):
         super().__init__()
         self.img_size = img_size
         self.patch_embed = PatchEmbed(
-            kernel_size=(1, 1),  #patch_size
-            stride=(1, 1),         #* previoulsy 4  changed from patch_size, patch_size to 8, 8 to get half-overlapping 64 x 64 dimension patches
+            kernel_size=(4,4),#**(1, 1),  #patch_size
+            stride=(4, 4),#**(1, 1),         #* previoulsy 4  changed from patch_size, patch_size to 8, 8 to get half-overlapping 64 x 64 dimension patches
             padding = (0, 0),
-            in_chans=192,
+            in_chans=64,#**192,
             embed_dim=embed_dim,
         )
 
@@ -62,10 +63,8 @@ class ImageEncoderViT(nn.Module):
                 torch.zeros(1, img_size // 4, img_size // 4, embed_dim)   #*changed from patch_size to 4   img_size // 4 changed to 160
             )
 
-        self.pos_embedc4 = nn.Parameter(
-            torch.zeros(1, img_size // 4, img_size // 4, 48)
-        )
-
+        
+        '''#** just for sryolo MF
         #for channel attention
         self.channel_embed_r = PatchEmbed(
             kernel_size = (patch_size, patch_size),
@@ -95,6 +94,18 @@ class ImageEncoderViT(nn.Module):
             embed_dim = 48,
         )
         
+        self.chan_block = CAttentionBlock(
+                embedding_dim = 48,
+                num_heads = num_heads,
+            )
+        '''
+        #TODO  down c4 and c2 blocks
+        ''' c4 and c2 blocks further channel fusion
+
+        self.pos_embedc4 = nn.Parameter(
+            torch.zeros(1, img_size // 4, img_size // 4, 48)
+        )
+
         self.c4_blocks  = nn.ModuleList()
         c4_depth = 3   #depth of c4 blocks
         for i in range(c4_depth):
@@ -111,21 +122,65 @@ class ImageEncoderViT(nn.Module):
                 embedding_dim= 96,
                 num_heads= num_heads
             )
+        '''
+        
+        
 
-        self.chan_block = CAttentionBlock(
-                embedding_dim = 48,
-                num_heads = num_heads,
+        #swin blocks
+        shift_size = [0, 2, 0, 2, 0, 2, 0, 2]
+        self.stage1 = nn.ModuleList()
+        for i in range(8):
+            block = SwinTransformerBlock(
+                dim=embed_dim,
+                input_resolution=(128,128),
+                num_heads=num_heads,
+                window_size=8,
+                shift_size=shift_size[i],
+                mlp_ratio=mlp_ratio,
+                qkv_bias=qkv_bias,
+                act_layer=act_layer,
+                linear_mlp= shift_size[i] == 0
             )
-            
-        #TODO following layer is huge and not used
-        ##self.fc_layer = MLPBlock(embedding_dim=192, mlp_dim=384, act=nn.GELU)
-        #nn.Linear(192, 192) #removed (img_size //16) *
+            self.stage1.append(block)
 
-        #local blocks
-        self.blocks = nn.ModuleList()
-        window_size = [13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13]   # lowest common multiple of 7, 9, 11 is 693 much bigger than 128
-        padding = [True, False, True, False, True, False, True, False, True, False, True]
-        for i in range(8):              #depth only for c1 blocks
+        self.pmerging1 = PatchMerging((128, 128), embed_dim)
+
+        self.stage2 = nn.ModuleList()
+        for i in range(3):
+            block = SwinTransformerBlock(
+                dim=384,
+                input_resolution=(64,64),
+                num_heads=num_heads,
+                window_size=8,
+                shift_size=shift_size[i],
+                mlp_ratio=mlp_ratio,
+                qkv_bias=qkv_bias,
+                act_layer=act_layer,
+            )
+            self.stage2.append(block)
+
+        self.pmerging2 = PatchMerging((64, 64), 384)
+
+        self.stage3 = nn.ModuleList()
+        for i in range(1):
+            block = SwinTransformerBlock(
+                dim=768,
+                input_resolution=(32,32),
+                num_heads=num_heads,
+                window_size=32,
+                shift_size=shift_size[i],
+                mlp_ratio=mlp_ratio,
+                qkv_bias=qkv_bias,
+                act_layer=act_layer,
+            )
+            self.stage3.append(block)
+
+
+        '''
+        previous blocks
+        top_padding = [False, True]
+        self.stage1 = nn.ModuleList()
+        for i in range(2):
             block = Block(
                 dim=embed_dim,
                 num_heads=num_heads,
@@ -135,85 +190,113 @@ class ImageEncoderViT(nn.Module):
                 act_layer=act_layer,
                 use_rel_pos=use_rel_pos,
                 rel_pos_zero_init=rel_pos_zero_init,
-                window_size= 11,       #window_size[i],#window_size[i] if i not in global_attn_indexes else 0,
-                top_padding = False,
-                input_size=(img_size // 13, img_size // 13),   #* changed from  // patch_size to 4
+                window_size=3,#window_size[i] if i not in global_attn_indexes else 0,
+                top_padding = False,#top_padding[i],
+                input_size=(img_size // 4, img_size // 4),
+
             )
-            self.blocks.append(block)
+            self.stage1.append(block)
+        self.pmerging1 = PatchMerging((128, 128), embed_dim)
+        #stage2
+
+        self.stage2 = nn.ModuleList()
+        for i in range(2):
+            block = Block(
+                dim=384,
+                num_heads=num_heads,
+                mlp_ratio=mlp_ratio,
+                qkv_bias=qkv_bias,
+                norm_layer=norm_layer,
+                act_layer=act_layer,
+                use_rel_pos=use_rel_pos,
+                rel_pos_zero_init=rel_pos_zero_init,
+                window_size=3,#window_size[i] if i not in global_attn_indexes else 0,
+                top_padding = False,#top_padding[i],
+                input_size=(img_size // 8, img_size // 8),
+
+            )
+            self.stage2.append(block)
+        self.pmerging2 = PatchMerging((64, 64), 384)
+        #stage3
+        self.stage3 = nn.ModuleList()
+        for i in range(2):
+            block = Block(
+                dim=768,
+                num_heads=num_heads,
+                mlp_ratio=mlp_ratio,
+                qkv_bias=qkv_bias,
+                norm_layer=norm_layer,
+                act_layer=act_layer,
+                use_rel_pos=use_rel_pos,
+                rel_pos_zero_init=rel_pos_zero_init,
+                window_size=3,#window_size[i] if i not in global_attn_indexes else 0,
+                top_padding = False,#top_padding[i],
+                input_size=(img_size // 16, img_size // 16),
+
+            )
+            self.stage3.append(block)
+        #TODO following layer is huge and not used
+        ##self.fc_layer = MLPBlock(embedding_dim=192, mlp_dim=384, act=nn.GELU)
+        #nn.Linear(192, 192) #removed (img_size //16) *
+        
+        '''
+    
         #a second pathc embedding
-        self.patch_embed2 = PatchEmbed(
-            kernel_size=(4, 4),
-            stride=(4,4),
-            padding=(0, 0),
-            in_chans=192,
-            embed_dim=768,
-        )
-        #global attention module
-        self.glob_block = Block(
-            dim = 768,
-            num_heads = num_heads,
-            mlp_ratio= mlp_ratio,
-            qkv_bias=qkv_bias,
-            norm_layer=norm_layer,
-            act_layer=act_layer,
-            use_rel_pos=use_rel_pos,
-            rel_pos_zero_init=rel_pos_zero_init,
-            window_size=0,
-            input_size=(128 // 4, 128 // 4),
-        )
+      
         self.neck3 = nn.Sequential(
             nn.Conv2d(
                 768,
-                out_chans,
+                128,
                 kernel_size=1,
                 bias=False,
             ),
-            LayerNorm2d(out_chans),
+            LayerNorm2d(128),
             nn.Conv2d(
-                out_chans,
-                out_chans,
+                128,
+                128,
                 kernel_size=3,
                 padding=1,
                 bias=False,
             ),
-            LayerNorm2d(out_chans),
+            LayerNorm2d(128),
         )
 
         self.neck2 = nn.Sequential(
             nn.Conv2d(
-                embed_dim,
-                out_chans,
+                384,
+                256,
                 kernel_size=1,
                 bias=False,
             ),
-            LayerNorm2d(out_chans),
+            LayerNorm2d(256),
             nn.Conv2d(
-                out_chans,
-                out_chans,
+                256,
+                256,
                 kernel_size=3,
                 padding=1,
                 bias=False,
             ),
-            LayerNorm2d(out_chans),
+            LayerNorm2d(256),
         )
-
+        """
         self.neck1 = nn.Sequential(
             nn.Conv2d(
                 embed_dim,
-                out_chans,
+                384,
                 kernel_size=1,
                 bias=False,
             ),
-            LayerNorm2d(out_chans),
+            LayerNorm2d(384),
             nn.Conv2d(
-                out_chans,
-                out_chans,
+                384,
+                384,
                 kernel_size=3,
                 padding=1,
                 bias=False,
             ),
-            LayerNorm2d(out_chans),
+            LayerNorm2d(384),
         )
+        """
     '''
     def fuse_chan(self, x: torch.Tensor):
         if x.shape[2] != 512:
@@ -246,24 +329,19 @@ class ImageEncoderViT(nn.Module):
         #fuse channels:
         
         ##patches = self.patch_embed(x)
-        #bs, h, w, c = x.shape
+        '''#** removed partially for sryolo MF
         r, g ,b, i = get_channels(x)
         r = self.channel_embed_r(r)#.unsqueeze(1)      #x1[:,0,:,:].unsqueeze(1)).view(bs, 1, 1, 1536)
         g = self.channel_embed_g(g)#.unsqueeze(1)      #x1[:,1,:,:].unsqueeze(1)).view(bs, 1, 1, 1536)
         b = self.channel_embed_b(b)#.unsqueeze(1)      #x1[:,2,:,:].unsqueeze(1)).view(bs, 1, 1, 1536)
         i = self.channel_embed_i(i)#.unsqueeze(1)       #x1[:,3,:,:].unsqueeze(1)).view(bs, 1, 1, 1536)
 
-        # x = torch.cat((r, g, b, i), 1)
-        # bs, c , h, w, emb = x.shape
-        # x = x.reshape(bs, h * w, c, emb)
-        # x = channel_partition(x)
+        x = self.chan_block(r, g, b, i)
+        x = x.permute(0, 3, 1, 2)
+        '''
+        x = self.patch_embed(x)
 
-        # for blk in self.chan_block:
-        #     x = blk(x)
-        # x = channel_unpartition(x, h, w, c)
-        # x = x.view(bs, h, w, 1, -1).squeeze(3)
-        # x = self.fc_layer(x)
-
+        """following c4 and c2 blocks
         #adding position embeddings to each channel separately
         if self.pos_embedc4 is not None:
             if r.shape[1] == self.pos_embedc4.shape[1]: #patches before
@@ -289,7 +367,7 @@ class ImageEncoderViT(nn.Module):
         #TODO potential for 1 fullcy connected layer to mix up c1 and c2
 
         #breakpoint()
-
+        """
         # x = self.chan_block(r, g, b, i)
         # x = x.permute(0, 3, 1, 2)
         # x = self.patch_embed(x)
@@ -299,23 +377,46 @@ class ImageEncoderViT(nn.Module):
             if x.shape[1] == self.pos_embed.shape[1]: #patches before
                 x = x + self.pos_embed
         #x = x1 + patches
-
-        for i in range(len(self.blocks)):
-            x = self.blocks[i](x)
+        bs, h, w, c = x.shape
+        x = x.view(bs, h*w, c)
+        z= []
+        for i in range(len(self.stage1)):
+            x = self.stage1[i](x)
             if i in (6, 7):
-                y.append(x)
-        x = x.permute(0, 3, 1, 2)
-        x = self.patch_embed2(x)
-        x = self.glob_block(x)
+                x = x.view(bs, h, w, c)
+                z.append(x)
+                x = x.view(bs, h * w, c)
+        
+        y.append(torch.cat(z, dim=-1))
+        #x = x.view(bs, h * w, c)
+        x = self.pmerging1(x, (h, w))
+
+
+
+        #stage2
+        for i in range(len(self.stage2)):
+            x = self.stage2[i](x)
+        x = x.view(bs, h//2, w//2, -1)
         y.append(x)
+        bs, h, w, c = x.shape
+        x = x.view(bs, h * w, c)
+        x = self.pmerging2(x, (h, w))
+
+
+        #stage3
+        for i in range(len(self.stage3)):
+            x = self.stage3[i](x)
+        x=x.view(bs, h//2, w//2, -1)
+        y.append(x)
+
         # for blk in self.blocks:
         #     x = blk(x)
         # x = self.neck(x.permute(0, 3, 1, 2))
         W = y[0].shape[2]
         Wg = x.shape[2]
         #y[0] = y[0] + x
-        y[0] = self.neck1(y[0].permute(0, 3, 1, 2)) ##[:, :, torch.arange(W) % 5 != 4,:]
-        y[1] = self.neck2(y[1].permute(0, 3, 1, 2)) ##[:, :, torch.arange(W) % 5 != 4,:]
+        y[0] = y[0].permute(0, 3, 1, 2) ##[:, :, torch.arange(W) % 5 != 4,:]
+        y[1] = F.interpolate(self.neck2(y[1].permute(0, 3, 1, 2)), scale_factor=2, mode='bilinear', align_corners=False) ##[:, :, torch.arange(W) % 5 != 4,:]
         y[2] =  F.interpolate(self.neck3(y[2].permute(0, 3, 1, 2)), scale_factor=4, mode='bilinear', align_corners=False)  ##[:, :, torch.arange(Wg) % 5 != 4,:]
         #y[0] = y[0] + y[2]
         return y
@@ -432,7 +533,7 @@ class Attention(nn.Module):
 
         self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
         self.proj = nn.Linear(dim, dim)
-
+        self.shifted = shifted
         self.use_rel_pos = use_rel_pos
         if self.use_rel_pos:
             assert (
@@ -441,8 +542,11 @@ class Attention(nn.Module):
             # initialize relative positional embeddings
             self.rel_pos_h = nn.Parameter(torch.zeros(2 * input_size[0] - 1, head_dim))
             self.rel_pos_w = nn.Parameter(torch.zeros(2 * input_size[1] - 1, head_dim))
-
+       
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if self.shifted:
+            x = self.cyclic_shift(x)
+
         B, H, W, _ = x.shape
         # qkv with shape (3, B, nHead, H * W, C)
         qkv = self.qkv(x).reshape(B, H * W, 3, self.num_heads, -1).permute(2, 0, 3, 1, 4)
@@ -540,7 +644,7 @@ class CAttentionBlock(nn.Module):
         # #x = self.dropout(x)
         # x = self.mlp(x)
         # x = self.norm5(x)
-        return x1, x2, x3, x4
+        return x
 
 
 
@@ -854,4 +958,329 @@ def get_channels(x):
     i = x[:,3,:,:].unsqueeze(1)#.index_select(1, idx)#.detach()#[:,3,:,:].unsqueeze(1)
     return r, g, b, i
 
+
+class PatchMerging(nn.Module):
+    r""" Patch Merging Layer.
+
+    Args:
+        input_resolution (tuple[int]): Resolution of input feature.
+        dim (int): Number of input channels.
+        norm_layer (nn.Module, optional): Normalization layer.  Default: nn.LayerNorm
+    """
+
+    def __init__(self, input_resolution, dim, norm_layer=nn.LayerNorm):
+        super().__init__()
+        self.input_resolution = input_resolution
+        self.dim = dim
+        self.reduction = nn.Linear(4 * dim, dim * 2, bias=False)
+        self.norm = norm_layer(dim * 2)
+
+    def forward(self, x, input_resolution):
+        """
+        x: B, H*W, C
+        """
+        H, W = input_resolution
+        B, L, C = x.shape
+        assert L == H * W, "input feature has wrong size"
+        assert H % 2 == 0 and W % 2 == 0, f"x size ({H}*{W}) are not even."
+
+        x = x.view(B, H, W, C)
+
+        x0 = x[:, 0::2, 0::2, :]  # B H/2 W/2 C
+        x1 = x[:, 1::2, 0::2, :]  # B H/2 W/2 C
+        x2 = x[:, 0::2, 1::2, :]  # B H/2 W/2 C
+        x3 = x[:, 1::2, 1::2, :]  # B H/2 W/2 C
+        x = torch.cat([x0, x1, x2, x3], -1)  # B H/2 W/2 4*C
+        x = x.view(B, -1, 4 * C)  # B H/2*W/2 4*C
+
+        x = self.reduction(x)
+        x = self.norm(x)
+
+        return x
+    
+
+class Mlp(nn.Module):
+    def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.GELU, linear_mlp=True, drop=0.):
+        super().__init__()
+        out_features = out_features or in_features
+        hidden_features = hidden_features or in_features
+        self.linear = linear_mlp
+        if self.linear:
+            self.fc1 = nn.Linear(in_features, hidden_features)
+            self.act = act_layer()
+            self.fc2 = nn.Linear(hidden_features, out_features)
+            self.drop = nn.Dropout(drop)
+        else:
+            self.fc1 = nn.Linear(in_features, in_features)
+            self.act = act_layer()
+            self.conv1 = nn.Conv2d(in_features, in_features, 2)
+            #self.conv2 = nn.Conv2d(in_features, in_features, 2)
+            self.fc2 = nn.Linear(in_features, out_features)
+            self.drop = nn.Dropout(drop)
+
+    def forward(self, x, H, W):
+        if self.linear:
+            x = self.fc1(x)
+            x = self.act(x)
+            x = self.drop(x)
+            x = self.fc2(x)
+            x = self.drop(x)
+        else:
+            x = self.fc1(x)
+            bs = x.shape[0]
+            x = x.permute(0, 2, 1).contiguous()
+            x = x.view(bs, -1, H, W)
+            x = F.pad(x, (0, 1, 0, 1))
+            x = self.conv1(x)
+            #x = F.pad(x, (0, 1, 0, 1))
+            #x = self.conv2(x)
+            x = x.permute(0, 2, 3, 1).contiguous()
+            x = x.view(bs, H * W, -1)
+            x = self.act(x)
+            x = self.drop(x)
+            x = self.fc2(x)
+            x = self.drop(x)
+
+
+        return x
+
+
+##Swin codes
+
+class WindowAttention(nn.Module):
+    r""" Window based multi-head self attention (W-MSA) module with relative position bias.
+    It supports both of shifted and non-shifted window.
+
+    Args:
+        dim (int): Number of input channels.
+        window_size (tuple[int]): The height and width of the window.
+        num_heads (int): Number of attention heads.
+        qkv_bias (bool, optional):  If True, add a learnable bias to query, key, value. Default: True
+        qk_scale (float | None, optional): Override default qk scale of head_dim ** -0.5 if set
+        attn_drop (float, optional): Dropout ratio of attention weight. Default: 0.0
+        proj_drop (float, optional): Dropout ratio of output. Default: 0.0
+    """
+
+    def __init__(self, dim, window_size, num_heads, qkv_bias=True, qk_scale=None, attn_drop=0., proj_drop=0.):
+
+        super().__init__()
+        self.dim = dim
+        self.window_size = window_size  # Wh, Ww
+        self.num_heads = num_heads
+        head_dim = dim // num_heads
+        self.scale = qk_scale or head_dim ** -0.5
+
+        # define a parameter table of relative position bias
+        self.relative_position_bias_table = nn.Parameter(
+            torch.zeros((2 * window_size[0] - 1) * (2 * window_size[1] - 1), num_heads))  # 2*Wh-1 * 2*Ww-1, nH
+
+        # get pair-wise relative position index for each token inside the window
+        coords_h = torch.arange(self.window_size[0])
+        coords_w = torch.arange(self.window_size[1])
+        coords = torch.stack(torch.meshgrid([coords_h, coords_w]))  # 2, Wh, Ww
+        coords_flatten = torch.flatten(coords, 1)  # 2, Wh*Ww
+        relative_coords = coords_flatten[:, :, None] - coords_flatten[:, None, :]  # 2, Wh*Ww, Wh*Ww
+        relative_coords = relative_coords.permute(1, 2, 0).contiguous()  # Wh*Ww, Wh*Ww, 2
+        relative_coords[:, :, 0] += self.window_size[0] - 1  # shift to start from 0
+        relative_coords[:, :, 1] += self.window_size[1] - 1
+        relative_coords[:, :, 0] *= 2 * self.window_size[1] - 1
+        relative_position_index = relative_coords.sum(-1)  # Wh*Ww, Wh*Ww
+        self.register_buffer("relative_position_index", relative_position_index)
+
+        self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
+        self.attn_drop = nn.Dropout(attn_drop)
+        self.proj = nn.Linear(dim, dim)
+        self.proj_drop = nn.Dropout(proj_drop)
+
+        trunc_normal_(self.relative_position_bias_table, std=.02)
+        self.softmax = nn.Softmax(dim=-1)
+
+    def forward(self, x, mask=None):
+        """
+        Args:
+            x: input features with shape of (num_windows*B, N, C)
+            mask: (0/-inf) mask with shape of (num_windows, Wh*Ww, Wh*Ww) or None
+        """
+        B_, N, C = x.shape
+        qkv = self.qkv(x).reshape(B_, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
+        q, k, v = qkv[0], qkv[1], qkv[2]  # make torchscript happy (cannot use tensor as tuple)
+
+        q = q * self.scale
+        attn = (q @ k.transpose(-2, -1))
+
+        relative_position_bias = self.relative_position_bias_table[self.relative_position_index.view(-1)].view(
+            self.window_size[0] * self.window_size[1], self.window_size[0] * self.window_size[1], -1)  # Wh*Ww,Wh*Ww,nH
+        relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()  # nH, Wh*Ww, Wh*Ww
+        attn = attn + relative_position_bias.unsqueeze(0)
+
+        if mask is not None:
+            nW = mask.shape[0]
+            attn = attn.view(B_ // nW, nW, self.num_heads, N, N) + mask.unsqueeze(1).unsqueeze(0)
+            attn = attn.view(-1, self.num_heads, N, N)
+            attn = self.softmax(attn)
+        else:
+            attn = self.softmax(attn)
+
+        attn = self.attn_drop(attn)
+
+        x = (attn @ v).transpose(1, 2).reshape(B_, N, C)
+        x = self.proj(x)
+        x = self.proj_drop(x)
+        return x
+
+    def extra_repr(self) -> str:
+        return f'dim={self.dim}, window_size={self.window_size}, num_heads={self.num_heads}'
+
+    def flops(self, N):
+        # calculate flops for 1 window with token length of N
+        flops = 0
+        # qkv = self.qkv(x)
+        flops += N * self.dim * 3 * self.dim
+        # attn = (q @ k.transpose(-2, -1))
+        flops += self.num_heads * N * (self.dim // self.num_heads) * N
+        #  x = (attn @ v)
+        flops += self.num_heads * N * N * (self.dim // self.num_heads)
+        # x = self.proj(x)
+        flops += N * self.dim * self.dim
+        return flops
+
+
+class SwinTransformerBlock(nn.Module):
+    r""" Swin Transformer Block.
+
+    Args:
+        dim (int): Number of input channels.
+        input_resolution (tuple[int]): Input resulotion.
+        num_heads (int): Number of attention heads.
+        window_size (int): Window size.
+        shift_size (int): Shift size for SW-MSA.
+        mlp_ratio (float): Ratio of mlp hidden dim to embedding dim.
+        qkv_bias (bool, optional): If True, add a learnable bias to query, key, value. Default: True
+        qk_scale (float | None, optional): Override default qk scale of head_dim ** -0.5 if set.
+        drop (float, optional): Dropout rate. Default: 0.0
+        attn_drop (float, optional): Attention dropout rate. Default: 0.0
+        drop_path (float, optional): Stochastic depth rate. Default: 0.0
+        act_layer (nn.Module, optional): Activation layer. Default: nn.GELU
+        norm_layer (nn.Module, optional): Normalization layer.  Default: nn.LayerNorm
+        fused_window_process (bool, optional): If True, use one kernel to fused window shift & window partition for acceleration, similar for the reversed part. Default: False
+    """
+
+    def __init__(self, dim, input_resolution, num_heads, window_size=7, shift_size=0,
+                 mlp_ratio=4., qkv_bias=True, qk_scale=None, drop=0., attn_drop=0., drop_path=0.,
+                 act_layer=nn.GELU, norm_layer=nn.LayerNorm,
+                 fused_window_process=False, linear_mlp = True):
+        super().__init__()
+        self.dim = dim
+        self.input_resolution = input_resolution
+        self.num_heads = num_heads
+        self.window_size = window_size
+        self.shift_size = shift_size
+        self.mlp_ratio = mlp_ratio
+        if min(self.input_resolution) <= self.window_size:
+            # if window size is larger than input resolution, we don't partition windows
+            self.shift_size = 0
+            self.window_size = min(self.input_resolution)
+        assert 0 <= self.shift_size < self.window_size, "shift_size must in 0-window_size"
+
+        self.norm1 = norm_layer(dim)
+        self.attn = WindowAttention(
+            dim, window_size=to_2tuple(self.window_size), num_heads=num_heads,
+            qkv_bias=qkv_bias, qk_scale=qk_scale, attn_drop=attn_drop, proj_drop=drop)
+
+        self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
+        self.norm2 = norm_layer(dim)
+        mlp_hidden_dim = int(dim * mlp_ratio)
+        self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, linear_mlp = linear_mlp )
+
+        if self.shift_size > 0:
+            # calculate attention mask for SW-MSA
+            H, W = self.input_resolution
+            img_mask = torch.zeros((1, H, W, 1))  # 1 H W 1
+            h_slices = (slice(0, -self.window_size),
+                        slice(-self.window_size, -self.shift_size),
+                        slice(-self.shift_size, None))
+            w_slices = (slice(0, -self.window_size),
+                        slice(-self.window_size, -self.shift_size),
+                        slice(-self.shift_size, None))
+            cnt = 0
+            for h in h_slices:
+                for w in w_slices:
+                    img_mask[:, h, w, :] = cnt
+                    cnt += 1
+
+            mask_windows, _ = window_partition(img_mask, self.window_size)  # nW, window_size, window_size, 1
+            mask_windows = mask_windows.view(-1, self.window_size * self.window_size)
+            attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
+            attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(attn_mask == 0, float(0.0))
+        else:
+            attn_mask = None
+
+        self.register_buffer("attn_mask", attn_mask)
+        self.fused_window_process = fused_window_process
+
+    def forward(self, x):
+        H, W = self.input_resolution
+        B, L, C = x.shape
+        assert L == H * W, "input feature has wrong size"
+
+        shortcut = x
+        x = self.norm1(x)
+        x = x.view(B, H, W, C)
+
+        # cyclic shift
+        if self.shift_size > 0:
+            if not self.fused_window_process:
+                shifted_x = torch.roll(x, shifts=(-self.shift_size, -self.shift_size), dims=(1, 2))
+                # partition windows
+                x_windows, phw = window_partition(shifted_x, self.window_size)  # nW*B, window_size, window_size, C
+            else:
+                x_windows = WindowProcess.apply(x, B, H, W, C, -self.shift_size, self.window_size)
+        else:
+            shifted_x = x
+            # partition windows
+            x_windows, phw = window_partition(shifted_x, self.window_size)  # nW*B, window_size, window_size, C
+
+        x_windows = x_windows.view(-1, self.window_size * self.window_size, C)  # nW*B, window_size*window_size, C
+
+        # W-MSA/SW-MSA
+        attn_windows = self.attn(x_windows, mask=self.attn_mask)  # nW*B, window_size*window_size, C
+
+        # merge windows
+        attn_windows = attn_windows.view(-1, self.window_size, self.window_size, C)
+
+        # reverse cyclic shift
+        if self.shift_size > 0:
+            if not self.fused_window_process:
+                shifted_x = window_unpartition(attn_windows, self.window_size, phw, (H, W))  # B H' W' C
+                x = torch.roll(shifted_x, shifts=(self.shift_size, self.shift_size), dims=(1, 2))
+            else:
+                x = WindowProcessReverse.apply(attn_windows, B, H, W, C, self.shift_size, self.window_size)
+        else:
+            shifted_x = window_unpartition(attn_windows, self.window_size,phw, (H, W))  # B H' W' C
+            x = shifted_x
+        x = x.view(B, H * W, C)
+        x = shortcut + self.drop_path(x)
+
+        # FFN
+        x = x + self.drop_path(self.mlp(self.norm2(x), H, W))
+
+        return x
+
+    def extra_repr(self) -> str:
+        return f"dim={self.dim}, input_resolution={self.input_resolution}, num_heads={self.num_heads}, " \
+               f"window_size={self.window_size}, shift_size={self.shift_size}, mlp_ratio={self.mlp_ratio}"
+
+    def flops(self):
+        flops = 0
+        H, W = self.input_resolution
+        # norm1
+        flops += self.dim * H * W
+        # W-MSA/SW-MSA
+        nW = H * W / self.window_size / self.window_size
+        flops += nW * self.attn.flops(self.window_size * self.window_size)
+        # mlp
+        flops += 2 * H * W * self.dim * self.dim * self.mlp_ratio
+        # norm2
+        flops += self.dim * H * W
+        return flops
 
