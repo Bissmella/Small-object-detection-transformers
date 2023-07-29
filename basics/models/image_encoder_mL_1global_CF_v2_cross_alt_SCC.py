@@ -60,7 +60,7 @@ class ImageEncoderViT(nn.Module):
         if use_abs_pos:
             # Initialize absolute positional embedding with pretrain image size.
             self.pos_embed = nn.Parameter(
-                torch.zeros(1, img_size // 4, img_size // 4, embed_dim)   #*changed from patch_size to 4   img_size // 4 changed to 160
+                torch.zeros(1, img_size // 4, img_size // 4, 48)   #*changed from patch_size to 4   img_size // 4 changed to 160
             )
 
         
@@ -97,6 +97,12 @@ class ImageEncoderViT(nn.Module):
         self.chan_block = CAttentionBlock(
                 embedding_dim = 48,
                 num_heads = num_heads,
+            )
+        self.chan_block2 = CAttentionBlock(
+                embedding_dim = 48,
+                num_heads = num_heads,
+                shift_size= 1,
+                
             )
         
         #TODO  down c4 and c2 blocks
@@ -243,41 +249,28 @@ class ImageEncoderViT(nn.Module):
     
         #a second pathc embedding
       
-        self.neck3 = nn.Sequential(
-            nn.Conv2d(
-                768,
-                128,
-                kernel_size=1,
-                bias=False,
-            ),
-            LayerNorm2d(128),
-            nn.Conv2d(
-                128,
-                128,
-                kernel_size=3,
-                padding=1,
-                bias=False,
-            ),
-            LayerNorm2d(128),
-        )
+        self.neck3 = nn.Conv2d(
+                    768,
+                    512,
+                    kernel_size=1,
+                    bias=False,
+            )
+           
 
-        self.neck2 = nn.Sequential(
-            nn.Conv2d(
+        self.neck2 = nn.Conv2d(
                 384,
                 256,
                 kernel_size=1,
                 bias=False,
-            ),
-            LayerNorm2d(256),
-            nn.Conv2d(
-                256,
-                256,
-                kernel_size=3,
-                padding=1,
-                bias=False,
-            ),
-            LayerNorm2d(256),
+            )
+        
+        self.neck1 = nn.Conv2d(
+            384,
+            128,
+            kernel_size=1,
+            bias=False,
         )
+
         """
         self.neck1 = nn.Sequential(
             nn.Conv2d(
@@ -336,7 +329,16 @@ class ImageEncoderViT(nn.Module):
         b = self.channel_embed_b(b)#.unsqueeze(1)      #x1[:,2,:,:].unsqueeze(1)).view(bs, 1, 1, 1536)
         i = self.channel_embed_i(i)#.unsqueeze(1)       #x1[:,3,:,:].unsqueeze(1)).view(bs, 1, 1, 1536)
 
-        x = self.chan_block(r, g, b, i)
+        if self.pos_embed is not None:
+            if r.shape[1] == self.pos_embed.shape[1]: #patches before
+                r = r + self.pos_embed
+                g = g + self.pos_embed
+                b = b + self.pos_embed
+                i = i + self.pos_embed
+
+        r, g, b, i = self.chan_block(r, g, b, i)
+        r, g, b, i = self.chan_block2(r, g, b, i)
+        x = torch.cat((r, g, b, i), dim=-1)
         x = x.permute(0, 3, 1, 2)
         
         x = self.patch_embed(x)
@@ -373,9 +375,9 @@ class ImageEncoderViT(nn.Module):
         # x = self.patch_embed(x)
 
         y = []
-        if self.pos_embed is not None:
-            if x.shape[1] == self.pos_embed.shape[1]: #patches before
-                x = x + self.pos_embed
+        # if self.pos_embed is not None:
+        #     if x.shape[1] == self.pos_embed.shape[1]: #patches before
+        #         x = x + self.pos_embed
         #x = x1 + patches
         bs, h, w, c = x.shape
         x = x.view(bs, h*w, c)
@@ -415,9 +417,9 @@ class ImageEncoderViT(nn.Module):
         W = y[0].shape[2]
         Wg = x.shape[2]
         #y[0] = y[0] + x
-        y[0] = y[0].permute(0, 3, 1, 2) ##[:, :, torch.arange(W) % 5 != 4,:]
-        y[1] = F.interpolate(self.neck2(y[1].permute(0, 3, 1, 2)), scale_factor=2, mode='bilinear', align_corners=False) ##[:, :, torch.arange(W) % 5 != 4,:]
-        y[2] =  F.interpolate(self.neck3(y[2].permute(0, 3, 1, 2)), scale_factor=4, mode='bilinear', align_corners=False)  ##[:, :, torch.arange(Wg) % 5 != 4,:]
+        y[0] = self.neck1(y[0].permute(0, 3, 1, 2)) ##[:, :, torch.arange(W) % 5 != 4,:]
+        y[1] = self.neck2(y[1].permute(0, 3, 1, 2)) #F.interpolate( , scale_factor=2, mode='bilinear', align_corners=False) ##[:, :, torch.arange(W) % 5 != 4,:]
+        y[2] =  self.neck3(y[2].permute(0, 3, 1, 2))    #F.interpolate(, scale_factor=4, mode='bilinear', align_corners=False)  ##[:, :, torch.arange(Wg) % 5 != 4,:]
         #y[0] = y[0] + y[2]
         return y
 
@@ -533,7 +535,7 @@ class Attention(nn.Module):
 
         self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
         self.proj = nn.Linear(dim, dim)
-        self.shifted = shifted
+        
         self.use_rel_pos = use_rel_pos
         if self.use_rel_pos:
             assert (
@@ -544,8 +546,7 @@ class Attention(nn.Module):
             self.rel_pos_w = nn.Parameter(torch.zeros(2 * input_size[1] - 1, head_dim))
        
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if self.shifted:
-            x = self.cyclic_shift(x)
+        
 
         B, H, W, _ = x.shape
         # qkv with shape (3, B, nHead, H * W, C)
@@ -573,6 +574,7 @@ class CAttentionBlock(nn.Module):
         out_dim: int = 192,
         activation: Type[nn.Module] = nn.ReLU,
         skip_pe: bool = True,
+        shift_size =0,
         ) -> None:
         '''
         transformer block for calculating intra channel attention for 4 channels
@@ -581,19 +583,45 @@ class CAttentionBlock(nn.Module):
         super().__init__()
 
 
-        self.r2g_attn = CAttention(embedding_dim, num_heads)
+        self.r2g_attn = CAttention(embedding_dim, num_heads, shift_size)
         self.norm1 = nn.LayerNorm(embedding_dim)
 
-        self.rg2b_attn = CAttention(embedding_dim, num_heads)
+        self.rg2b_attn = CAttention(embedding_dim, num_heads, shift_size)
         self.norm2 = nn.LayerNorm(embedding_dim)
 
 
-        self.rgb2ir_attn = CAttention(embedding_dim, num_heads)
+        self.rgb2ir_attn = CAttention(embedding_dim, num_heads, shift_size)
         self.norm3 = nn.LayerNorm(embedding_dim)
 
-        self.ir2rgb_attn = CAttention(embedding_dim, num_heads)
+        self.ir2rgb_attn = CAttention(embedding_dim, num_heads, shift_size)
         self.norm4 = nn.LayerNorm(embedding_dim)
         
+        self.window_size = 2
+        self.input_resolution = (128, 128)
+        self.shift_size = shift_size
+        if self.shift_size > 0:
+            # calculate attention mask for SW-MSA
+            H, W = self.input_resolution
+            img_mask = torch.zeros((1, H, W, 1))  # 1 H W 1
+            h_slices = (slice(0, -self.window_size),
+                        slice(-self.window_size, -self.shift_size),
+                        slice(-self.shift_size, None))
+            w_slices = (slice(0, -self.window_size),
+                        slice(-self.window_size, -self.shift_size),
+                        slice(-self.shift_size, None))
+            cnt = 0
+            for h in h_slices:
+                for w in w_slices:
+                    img_mask[:, h, w, :] = cnt
+                    cnt += 1
+            mask_windows, _ = window_partition(img_mask, self.window_size)  # nW, window_size, window_size, 1
+            mask_windows = mask_windows.view(-1, self.window_size * self.window_size)
+            attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
+            attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(attn_mask == 0, float(0.0))
+        else:
+            attn_mask = None
+
+        self.register_buffer("attn_mask", attn_mask)
         # self.fc_layer = nn.Linear (192, out_dim)
         # #self.dropout = nn.Dropout(0.4)
         # self.mlp = MLPBlock(out_dim, 256, activation)
@@ -601,50 +629,94 @@ class CAttentionBlock(nn.Module):
 
     def forward(self, r: torch.Tensor, g: torch.Tensor, b: torch.Tensor, ir: torch.Tensor, window_size:int = 2):
         b1, h, w, c = r.shape
-        r, r_hw =window_partition(r, window_size)
-        g, g_hw = window_partition(g, window_size)
-        b, b_hw = window_partition(b, window_size)
-        ir, ir_hw = window_partition(ir, window_size)
-        b2, h2, w2, c2 = r.shape
-        r = r.reshape(b2, h2 * w2, c2)
-        g = g.reshape(b2, h2 * w2, c2)
-        b = b.reshape(b2, h2 * w2, c2)
-        ir = ir.reshape(b2, h2 * w2, c2)
+        # r, r_hw =window_partition(r, window_size)
+        # g, g_hw = window_partition(g, window_size)
+        # b, b_hw = window_partition(b, window_size)
+        # ir, ir_hw = window_partition(ir, window_size)
+        # b2, h2, w2, c2 = r.shape
 
-        attn_out = self.r2g_attn(q = r, k =g, v =g)
-        x1 = r + attn_out
-        x1 = self.norm1(x1)
+        if self.shift_size > 0:
+            #shifted_x = torch.roll(x, shifts=(-self.shift_size, -self.shift_size), dims=(1, 2))
+            shifted_r = torch.roll(r, shifts=(-self.shift_size, -self.shift_size), dims=(1, 2))
+            shifted_g = torch.roll(g, shifts=(-self.shift_size, -self.shift_size), dims=(1, 2))
+            shifted_b = torch.roll(b, shifts=(-self.shift_size, -self.shift_size), dims=(1, 2))
+            shifted_ir =torch.roll(ir, shifts=(-self.shift_size, -self.shift_size), dims=(1, 2))
+            
+            #partition of windows
+            r_w, r_hw = window_partition(shifted_r, self.window_size)
+            g_w, g_hw = window_partition(shifted_g, self.window_size)
+            b_w, b_hw = window_partition(shifted_b, self.window_size)
+            ir_w, ir_hw = window_partition(shifted_ir, self.window_size)
+            b2, h2, w2, c2 = r_w.shape
+            # partition windows
+            #x_windows = window_partition(shifted_x, self.window_size)  # nW*B, window_size, window_size, C
+            
+        else:
+            #shifted_x = x
+            # partition windows
+            #x_windows = window_partition(shifted_x, self.window_size)  # nW*B, window_size, window_size, C
+            r_w, r_hw =window_partition(r, window_size)
+            g_w, g_hw = window_partition(g, window_size)
+            b_w, b_hw = window_partition(b, window_size)
+            ir_w, ir_hw = window_partition(ir, window_size)
+            b2, h2, w2, c2 = r_w.shape
 
-        attn_out = self.rg2b_attn(q = g, k =b, v =b)
-        x2 = g + attn_out
-        x2 = self.norm2(x2)
+        r_w = r_w.reshape(b2, h2 * w2, c2)
+        g_w = g_w.reshape(b2, h2 * w2, c2)
+        b_w = b_w.reshape(b2, h2 * w2, c2)
+        ir_w = ir_w.reshape(b2, h2 * w2, c2)
+
+        r_out = self.r2g_attn(q = r_w, k =g_w, v =g_w, dimensions =(h, w), mask =self.attn_mask)
+        #x1 = r + r_out
+        #x1 = self.norm1(x1)
+
+        g_out = self.rg2b_attn(q = g_w, k =b_w, v =b_w, dimensions =(h, w), mask =self.attn_mask)
+        #x2 = g + g_out
+        #x2 = self.norm2(x2)
 
 
-        attn_out = self.rgb2ir_attn(q =b, k =ir, v =ir)
-        x3 = b + attn_out
-        x3 = self.norm3(x3)
+        b_out = self.rgb2ir_attn(q =b_w, k =ir_w, v =ir_w, dimensions =(h, w), mask =self.attn_mask)
+        #x3 = b + b_out
+        #x3 = self.norm3(x3)
 
-        attn_out = self.ir2rgb_attn(q = ir, k =g, v =g )
-        x4 = ir + attn_out
-        x4 = self.norm4(x4)
+        ir_out = self.ir2rgb_attn(q = ir_w, k =g_w, v =g_w, dimensions =(h, w), mask =self.attn_mask)
+        #x4 = ir + ir_out
+        #x4 = self.norm4(x4)
 
+        r_out = r_out.view(b2, h2, w2, c2)
+        g_out = g_out.view(b2, h2, w2, c2)
+        b_out = b_out.view(b2, h2, w2, c2)
+        ir_out = ir_out.view(b2, h2, w2, c2)
 
-        x1 = x1.view(b2, h2, w2, c2)
-        x2 = x2.view(b2, h2, w2, c2)
-        x3 = x3.view(b2, h2, w2, c2)
-        x4 = x4.view(b2, h2, w2, c2)
+        if self.shift_size > 0:
+            shifted_r = window_unpartition(r_out, self.window_size, r_hw, (h, w))  # B H' W' C
+            shifted_g =  window_unpartition(g_out, self.window_size, g_hw, (h, w))
+            shifted_b =  window_unpartition(b_out, self.window_size, b_hw, (h, w))
+            shifted_ir =  window_unpartition(ir_out, self.window_size, ir_hw, (h, w))
+            r_out = torch.roll(shifted_r, shifts=(self.shift_size, self.shift_size), dims=(1, 2))
+            g_out = torch.roll(shifted_g, shifts=(self.shift_size, self.shift_size), dims=(1, 2))
+            b_out = torch.roll(shifted_b, shifts=(self.shift_size, self.shift_size), dims=(1, 2))
+            ir_out = torch.roll(shifted_ir, shifts=(self.shift_size, self.shift_size), dims=(1, 2))
+        else:
+            #shifted_x = window_reverse(attn_windows, self.window_size, H, W)  # B H' W' C
+            r_out = window_unpartition(r_out, self.window_size, r_hw, (h, w))  # B H' W' C
+            g_out =  window_unpartition(g_out, self.window_size, g_hw, (h, w))
+            b_out =  window_unpartition(b_out, self.window_size, b_hw, (h, w))
+            ir_out =  window_unpartition(ir_out, self.window_size, ir_hw, (h, w))
+            #x = shifted_x
 
+        x1 = self.norm1(r + r_out)
+        x2 = self.norm2(g + g_out)
+        x3 = self.norm3(b + b_out)
+        x4 = self.norm4(ir + ir_out)
+        
 
-        x1 = window_unpartition(x1, window_size, r_hw, (h, w))
-        x2 = window_unpartition(x2, window_size, g_hw, (h, w))
-        x3 = window_unpartition(x3, window_size, b_hw, (h, w))
-        x4 = window_unpartition(x4, window_size, ir_hw, (h, w))
-        x = torch.cat((x1, x2, x3, x4), dim=-1)
+        #x = torch.cat((x1, x2, x3, x4), dim=-1)
         # x = self.fc_layer(x)
         # #x = self.dropout(x)
         # x = self.mlp(x)
         # x = self.norm5(x)
-        return x
+        return x1, x2, x3, x4
 
 
 
@@ -721,12 +793,12 @@ class CAttention(nn.Module):
     def __init__(self, 
                 embedding_dim:int,
                 num_heads: int= 8,
+                shift_size = 0
                 ) -> None:
-                super().__init__()
-                self.embedding_dim = embedding_dim
-                self.num_heads = num_heads
-
-                self.v_proj = nn.Linear(embedding_dim, embedding_dim)
+        super().__init__()
+        self.embedding_dim = embedding_dim
+        self.num_heads = num_heads
+        self.mlp = Mlp(embedding_dim, embedding_dim * 4, embedding_dim, linear_mlp=True)
 
     def _separate_heads(self, x: torch.Tensor, num_heads: int) -> torch.Tensor:
         b, n, c = x.shape
@@ -738,8 +810,11 @@ class CAttention(nn.Module):
         x = x.transpose(1, 2)
         return x.reshape(b, n_tokens, n_heads * c_per_head)
 
-    def forward(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
-
+    def forward(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, dimensions, mask = None) -> torch.Tensor:
+        '''
+        -dimensions: tuple(int, int) the original dimension of feature map before window partitioning in height and width
+        '''
+        B_, N, C = q.shape
         q = self._separate_heads(q, self.num_heads)
         k = self._separate_heads(k, self.num_heads)
         v = self._separate_heads(v, self.num_heads)
@@ -747,12 +822,20 @@ class CAttention(nn.Module):
         #Attention
         _, _, _, c_per_head = q.shape
         attn = q @ k.permute(0, 1, 3, 2)
+        if mask is not None:
+            nW = mask.shape[0]
+            attn = attn.view(B_ // nW, nW, self.num_heads, N, N) + mask.unsqueeze(1).unsqueeze(0)
+            attn = attn.view(-1, self.num_heads, N, N)
+            #attn = self.softmax(attn)
+        
+            #attn = self.softmax(attn)
         attn = attn / math.sqrt(c_per_head)
         attn = torch.softmax(attn, dim=-1)
 
         #output
         out = attn @ v
         out = self._recombine_heads(out)
+        out = out + self.mlp(out, dimensions[0], dimensions[1])  #128 is hard coded height and width
         return out
 
 
@@ -949,6 +1032,7 @@ def channel_unpartition(x, h, w):
 
 def get_channels(x):
     #idx = torch.tensor([0]).to(x.device)
+
     r = x[:,0,:,:].unsqueeze(1)#.index_select(1, idx)#.detach()#[:,0,:,:]
     #idx = torch.tensor([1]).to(x.device)
     g = x[:,1,:,:].unsqueeze(1)#.index_select(1, idx)#.detach()#[:,1,:,:].unsqueeze(1)
@@ -1005,6 +1089,7 @@ class Mlp(nn.Module):
         out_features = out_features or in_features
         hidden_features = hidden_features or in_features
         self.linear = linear_mlp
+        self.bs = in_features
         if self.linear:
             self.fc1 = nn.Linear(in_features, hidden_features)
             self.act = act_layer()
@@ -1013,7 +1098,7 @@ class Mlp(nn.Module):
         else:
             self.fc1 = nn.Linear(in_features, in_features)
             self.act = act_layer()
-            self.conv1 = nn.Conv2d(in_features, in_features, 2)
+            self.conv1 = nn.Conv2d(in_features, in_features, 3, padding=1, groups=in_features)
             #self.conv2 = nn.Conv2d(in_features, in_features, 2)
             self.fc2 = nn.Linear(in_features, out_features)
             self.drop = nn.Dropout(drop)
@@ -1030,7 +1115,7 @@ class Mlp(nn.Module):
             bs = x.shape[0]
             x = x.permute(0, 2, 1).contiguous()
             x = x.view(bs, -1, H, W)
-            x = F.pad(x, (0, 1, 0, 1))
+            #x = F.pad(x, (0, 1, 0, 1))
             x = self.conv1(x)
             #x = F.pad(x, (0, 1, 0, 1))
             #x = self.conv2(x)
