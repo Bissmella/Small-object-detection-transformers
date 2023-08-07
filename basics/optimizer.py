@@ -45,8 +45,33 @@ def set_weight_decay(model, skip_list=(), skip_keywords=()):
             # print(f"{name} has no weight decay")
         else:
             has_decay.append(param)
-    return [{'params': has_decay},
+    return [{'params': has_decay, 'weight_decay': 0.00048},   #
             {'params': no_decay, 'weight_decay': 0.}]
+
+def set_weight_decay_lr(model, skip_list=(), skip_keywords=()):
+    has_decay = []
+    no_decay = []
+    swin = []
+    no_swin = []
+    for name, param in model.named_parameters():
+        if not param.requires_grad:
+            continue  # frozen weights
+        if not name.startswith("image_encoder.layers") and len(param.shape) == 1 or name.endswith(".bias") or (name in skip_list) or \
+                check_keywords_in_name(name, skip_keywords):
+            no_decay.append(param)
+            # print(f"{name} has no weight decay")
+        elif not name.startswith("image_encoder.layers"):
+            has_decay.append(param)
+        elif name.startswith("image_encoder.layers"):
+            swin.append(param)
+
+
+    return [{'params': has_decay, 'weight_decay': 0.0005, 'lr': 0.008707503878730642 },
+            {'params': no_decay, 'weight_decay': 0., 'lr': 0.008707503878730642},
+            {'params': swin, 'lr': 0.004, 'weight_decay': 0.05}
+            #{'params': no_swin}
+
+            ]
 
 
 def check_keywords_in_name(name, keywords=()):

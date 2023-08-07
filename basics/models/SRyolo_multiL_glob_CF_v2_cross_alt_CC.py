@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 from .common import *
 # from models.swin_transformer import *
 from .experimental import *
-from .image_encoder_mL_1global_CF_v2_cross_alt_SCC import *
+from .image_encoder_mL_1global_CF_v2_cross_alt_CC import *  #image_encoder_mL_1global_CF_v2_cross_alt_SCC
 # from models.edsr import EDSR
 from ..utils.autoanchor import check_anchor_order
 from ..utils.general import make_divisible, check_file, set_logging
@@ -365,7 +365,7 @@ def parse_model(d, string, ch,config):  # model_dict, input_channels(3)
     else:
         d_ = d[stri[-1]]
     if string == 'head':
-        #ch.append(128)
+        ch[0] = 256
         ch.append(256)
         ch.append(512)
     for i, (f, n, m, args) in enumerate(d_):  # from, number, module, args

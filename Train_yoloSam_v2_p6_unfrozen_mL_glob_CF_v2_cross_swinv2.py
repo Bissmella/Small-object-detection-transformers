@@ -109,22 +109,27 @@ def train(hyp, opt, device, tb_writer=None):
         logger.info('Transferred %g/%g items from %s' % (len(state_dict), len(model.state_dict()), weights))  # report
     else:
         model = Model(opt.cfg, input_mode = opt.input_mode ,ch_steam=opt.ch_steam,ch=opt.ch, nc=nc, anchors=hyp.get('anchors'),config=None,sr=opt.super,factor=down_factor).to(device)  # create
-        '''
+        
         #* loading SAM backbone weights
+        
         SAM_weights = torch.load("/home/bbahaduri/sryolo/weights/swinv2_tiny_patch4_window8_256.pth")
         vit_bb = {}
-        for key in SAM_weights.keys():
-            if key.startswith("image_encoder"):     #* and not key.startswith("image_encoder.patch_embed") and not key.startswith("image_encoder.pos_embed"): 
+
+        for key in SAM_weights['model'].keys():
+
+            if not key.startswith("patch_embed") and not key.startswith("head") and not key.startswith("norm") and "attn_mask" not in key:   #not key.startswith("patch_embed")  #* and not key.startswith("image_encoder.patch_embed") and not key.startswith("image_encoder.pos_embed"): 
+                vit_bb[key] = SAM_weights['model'][key]
                 print(key)
-                vit_bb[key] = SAM_weights[key]
-        model.load_state_dict(vit_bb, strict=False)
+
+        model.image_encoder.load_state_dict(vit_bb, strict=False)
+
         print("related weights loaded from SAM")
-        
-        for name, param in model.named_parameters():
-         if name.startswith("image_encoder"):   #* and not name.startswith("image_encoder.patch_embed") and not name.startswith("image_encoder.pos_embed"):
-             param.requires_grad = False
+      
+        # for name, param in model.named_parameters():
+        #  if name.startswith("image_encoder"):   #* and not name.startswith("image_encoder.patch_embed") and not name.startswith("image_encoder.pos_embed"):
+        #      param.requires_grad = False
              #print(name, param.requires_grad)
-        '''
+        
         
     
     #breakpoint()
@@ -161,14 +166,15 @@ def train(hyp, opt, device, tb_writer=None):
         skip = model.no_weight_decay()
     if hasattr(model, 'no_weight_decay_keywords'):
         skip_keywords = model.no_weight_decay_keywords()
-    from basics.optimizer import set_weight_decay
+    from basics.optimizer import set_weight_decay, set_weight_decay_lr
     pg0 = set_weight_decay(model, skip, skip_keywords)
 
     if opt.adam:
         optimizer = optim.Adam(pg0, lr=hyp['lr0'], betas=(hyp['momentum'], 0.999))  # adjust beta1 to momentum
     else:
-        optimizer = optim.SGD(pg0, lr=hyp['lr0'], momentum=hyp['momentum'], weight_decay= 0.00004, nesterov=True)
-
+        optimizer = optim.SGD(pg0, lr=hyp['lr0'], momentum=hyp['momentum'], weight_decay=hyp['weight_decay'], nesterov=True)
+    
+   
     # optimizer.add_param_group({'params': pg1, 'weight_decay': hyp['weight_decay']})  # add pg1 with weight_decay
     # optimizer.add_param_group({'params': pg2})  # add pg2 (biases)
     # logger.info('Optimizer groups: %g .bias, %g conv.weight, %g other' % (len(pg2), len(pg1), len(pg0)))
@@ -191,7 +197,7 @@ def train(hyp, opt, device, tb_writer=None):
     if pretrained:
         # Optimizer
         if ckpt['optimizer'] is not None:
-            optimizer.load_state_dict(ckpt['optimizer'])
+            #optimizer.load_state_dict(ckpt['optimizer'])
             best_fitness = ckpt['best_fitness']
 
         # EMA
@@ -343,14 +349,16 @@ def train(hyp, opt, device, tb_writer=None):
         # model.module.conv5.t = t
         model.train()
 
-        '''
+       
         #*changed freezing parameters for SAM backbone
         #doing it once again:
-        for name, param in model.module.named_parameters():
-         if name.startswith("image_encoder"):   #* and not name.startswith("image_encoder.patch_embed") and not name.startswith("image_encoder.pos_embed"):
+        
+        for name, param in model.named_parameters():
+         if name.startswith("image_encoder.layers.0.blocks.0"):   #* and not name.startswith("image_encoder.patch_embed") and not name.startswith("image_encoder.pos_embed"):
              param.requires_grad = False
-             print(name, param.requires_grad)
-        '''
+             #print(name, param.requires_grad)
+       
+        
         # Update image weights (optional)
         if opt.image_weights:
             # Generate indices
