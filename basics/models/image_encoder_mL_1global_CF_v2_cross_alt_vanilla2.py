@@ -49,10 +49,10 @@ class ImageEncoderViT(nn.Module):
         super().__init__()
         self.img_size = img_size
         self.patch_embed = PatchEmbed(
-            kernel_size=(1, 1),  #patch_size
-            stride=(1, 1),         #* previoulsy 4  changed from patch_size, patch_size to 8, 8 to get half-overlapping 64 x 64 dimension patches
+            kernel_size=(4, 4),  #patch_size
+            stride=(4, 4),         #* previoulsy 4  changed from patch_size, patch_size to 8, 8 to get half-overlapping 64 x 64 dimension patches
             padding = (0, 0),
-            in_chans=192,
+            in_chans=4,
             embed_dim=embed_dim,
         )
 
@@ -60,12 +60,13 @@ class ImageEncoderViT(nn.Module):
         if use_abs_pos:
             # Initialize absolute positional embedding with pretrain image size.
             self.pos_embed = nn.Parameter(
-                torch.zeros(1, img_size // 4, img_size // 4, embed_dim)   #*changed from patch_size to 4   img_size // 4 changed to 160
+                torch.zeros(1, img_size // 4, img_size // 4, 192)   #*changed from patch_size to 4   img_size // 4 changed to 160
             )
 
         
         
         #for channel attention
+        """
         self.channel_embed_r = PatchEmbed(
             kernel_size = (patch_size, patch_size),
             stride = (4, 4),
@@ -98,13 +99,13 @@ class ImageEncoderViT(nn.Module):
                 embedding_dim = 48,
                 num_heads = num_heads,
             )
-        # self.chan_block2 = CAttentionBlock(
-        #         embedding_dim = 48,
-        #         num_heads = num_heads,
-        #         shift_size= 1,
+        self.chan_block2 = CAttentionBlock(
+                embedding_dim = 48,
+                num_heads = num_heads,
+                shift_size= 1,
                 
-        #     )
-        
+            )
+        """
         #TODO  down c4 and c2 blocks
         ''' c4 and c2 blocks further channel fusion
 
@@ -323,11 +324,11 @@ class ImageEncoderViT(nn.Module):
         
         ##patches = self.patch_embed(x)
         
-        r, g ,b, i = get_channels(x)
-        r = self.channel_embed_r(r)#.unsqueeze(1)      #x1[:,0,:,:].unsqueeze(1)).view(bs, 1, 1, 1536)
-        g = self.channel_embed_g(g)#.unsqueeze(1)      #x1[:,1,:,:].unsqueeze(1)).view(bs, 1, 1, 1536)
-        b = self.channel_embed_b(b)#.unsqueeze(1)      #x1[:,2,:,:].unsqueeze(1)).view(bs, 1, 1, 1536)
-        i = self.channel_embed_i(i)#.unsqueeze(1)       #x1[:,3,:,:].unsqueeze(1)).view(bs, 1, 1, 1536)
+        # r, g ,b, i = get_channels(x)
+        # r = self.channel_embed_r(r)#.unsqueeze(1)      #x1[:,0,:,:].unsqueeze(1)).view(bs, 1, 1, 1536)
+        # g = self.channel_embed_g(g)#.unsqueeze(1)      #x1[:,1,:,:].unsqueeze(1)).view(bs, 1, 1, 1536)
+        # b = self.channel_embed_b(b)#.unsqueeze(1)      #x1[:,2,:,:].unsqueeze(1)).view(bs, 1, 1, 1536)
+        # i = self.channel_embed_i(i)#.unsqueeze(1)       #x1[:,3,:,:].unsqueeze(1)).view(bs, 1, 1, 1536)
 
         # if self.pos_embed is not None:
         #     if r.shape[1] == self.pos_embed.shape[1]: #patches before
@@ -336,16 +337,16 @@ class ImageEncoderViT(nn.Module):
         #         b = b + self.pos_embed
         #         i = i + self.pos_embed
 
-        r, g, b, i = self.chan_block(r, g, b, i)
-        #r, g, b, i = self.chan_block2(r, g, b, i)
-        x = torch.cat((r, g, b, i), dim=-1)
-        x = x.permute(0, 3, 1, 2)
+        # r, g, b, i = self.chan_block(r, g, b, i)
+        # r, g, b, i = self.chan_block2(r, g, b, i)
+        # x = torch.cat((r, g, b, i), dim=-1)
+        # x = x.permute(0, 3, 1, 2)
         
         x = self.patch_embed(x)
 
         if self.pos_embed is not None:
-            if x.shape[1] == self.pos_embed.shape[1]: #patches before
-                x = x + self.pos_embed
+             if x.shape[1] == self.pos_embed.shape[1]: #patches before
+                 x = x + self.pos_embed
 
         """following c4 and c2 blocks
         #adding position embeddings to each channel separately
@@ -805,7 +806,7 @@ class CAttention(nn.Module):
         super().__init__()
         self.embedding_dim = embedding_dim
         self.num_heads = num_heads
-        #self.mlp = Mlp(embedding_dim, embedding_dim * 4, embedding_dim, linear_mlp=True)
+        self.mlp = Mlp(embedding_dim, embedding_dim * 4, embedding_dim, linear_mlp=True)
 
     def _separate_heads(self, x: torch.Tensor, num_heads: int) -> torch.Tensor:
         b, n, c = x.shape
@@ -842,7 +843,7 @@ class CAttention(nn.Module):
         #output
         out = attn @ v
         out = self._recombine_heads(out)
-        #out = out + self.mlp(out, dimensions[0], dimensions[1])  #128 is hard coded height and width
+        out = out + self.mlp(out, dimensions[0], dimensions[1])  #128 is hard coded height and width
         return out
 
 

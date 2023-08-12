@@ -4449,7 +4449,7 @@ class CAttention(nn.Module):
         super().__init__()
         self.embedding_dim = embedding_dim
         self.num_heads = num_heads
-        self.mlp = Mlp(embedding_dim, embedding_dim * 4, embedding_dim, linear_mlp=True)
+        #self.mlp = Mlp(embedding_dim, embedding_dim * 4, embedding_dim, linear_mlp=True)
 
     def _separate_heads(self, x: torch.Tensor, num_heads: int) -> torch.Tensor:
         b, n, c = x.shape
@@ -4461,7 +4461,7 @@ class CAttention(nn.Module):
         x = x.transpose(1, 2)
         return x.reshape(b, n_tokens, n_heads * c_per_head)
 
-    def forward(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, dimensions, mask = None) -> torch.Tensor:
+    def forward(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, mask = None) -> torch.Tensor:
         '''
         -dimensions: tuple(int, int) the original dimension of feature map before window partitioning in height and width
         '''
@@ -4486,7 +4486,7 @@ class CAttention(nn.Module):
         #output
         out = attn @ v
         out = self._recombine_heads(out)
-        out = out + self.mlp(out, dimensions[0], dimensions[1])  #128 is hard coded height and width
+        #out = out + self.mlp(out, dimensions[0], dimensions[1])  #128 is hard coded height and width
         return out
 
 class Mlp(nn.Module):
@@ -4599,6 +4599,7 @@ class CAttentionBlock(nn.Module):
         activation: Type[nn.Module] = nn.ReLU,
         skip_pe: bool = True,
         shift_size =0,
+        ape = False
         ) -> None:
         '''
         transformer block for calculating intra channel attention for 4 channels
@@ -4606,48 +4607,25 @@ class CAttentionBlock(nn.Module):
 
         super().__init__()
 
-
-        self.r2g_attn = CAttention(embedding_dim, num_heads, shift_size)
+        self.pos_embed = None
+        if ape:
+            self.pos_embed = nn.Parameter(
+                torch.zeros(1, 2, 2, 16))
+        self.r2g_attn = CAttention(embedding_dim, num_heads)
         self.norm1 = nn.LayerNorm(embedding_dim)
 
-        self.rg2b_attn = CAttention(embedding_dim, num_heads, shift_size)
+        self.rg2b_attn = CAttention(embedding_dim, num_heads)
         self.norm2 = nn.LayerNorm(embedding_dim)
 
 
-        self.rgb2ir_attn = CAttention(embedding_dim, num_heads, shift_size)
+        self.rgb2ir_attn = CAttention(embedding_dim, num_heads)
         self.norm3 = nn.LayerNorm(embedding_dim)
 
-        self.ir2rgb_attn = CAttention(embedding_dim, num_heads, shift_size)
+        self.ir2rgb_attn = CAttention(embedding_dim, num_heads)
         self.norm4 = nn.LayerNorm(embedding_dim)
 
-        #self.mlp = Mlp(out_dim, out_dim * 4, out_dim, linear_mlp=True)
-        
-        self.window_size = 2
-        self.input_resolution = (128, 128)
-        self.shift_size = shift_size
-        if self.shift_size > 0:
-            # calculate attention mask for SW-MSA
-            H, W = self.input_resolution
-            img_mask = torch.zeros((1, H, W, 1))  # 1 H W 1
-            h_slices = (slice(0, -self.window_size),
-                        slice(-self.window_size, -self.shift_size),
-                        slice(-self.shift_size, None))
-            w_slices = (slice(0, -self.window_size),
-                        slice(-self.window_size, -self.shift_size),
-                        slice(-self.shift_size, None))
-            cnt = 0
-            for h in h_slices:
-                for w in w_slices:
-                    img_mask[:, h, w, :] = cnt
-                    cnt += 1
-            mask_windows, _ = window_partition(img_mask, self.window_size)  # nW, window_size, window_size, 1
-            mask_windows = mask_windows.view(-1, self.window_size * self.window_size)
-            attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
-            attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(attn_mask == 0, float(0.0))
-        else:
-            attn_mask = None
 
-        self.register_buffer("attn_mask", attn_mask)
+
         # self.fc_layer = nn.Linear (192, out_dim)
         # #self.dropout = nn.Dropout(0.4)
         # self.mlp = MLPBlock(out_dim, 256, activation)
@@ -4655,90 +4633,55 @@ class CAttentionBlock(nn.Module):
 
     def forward(self, r: torch.Tensor, g: torch.Tensor, b: torch.Tensor, ir: torch.Tensor, window_size:int = 2):
         b1, h, w, c = r.shape
-        # r, r_hw =window_partition(r, window_size)
-        # g, g_hw = window_partition(g, window_size)
-        # b, b_hw = window_partition(b, window_size)
-        # ir, ir_hw = window_partition(ir, window_size)
-        # b2, h2, w2, c2 = r.shape
 
-        if self.shift_size > 0:
-            #shifted_x = torch.roll(x, shifts=(-self.shift_size, -self.shift_size), dims=(1, 2))
-            shifted_r = torch.roll(r, shifts=(-self.shift_size, -self.shift_size), dims=(1, 2))
-            shifted_g = torch.roll(g, shifts=(-self.shift_size, -self.shift_size), dims=(1, 2))
-            shifted_b = torch.roll(b, shifts=(-self.shift_size, -self.shift_size), dims=(1, 2))
-            shifted_ir =torch.roll(ir, shifts=(-self.shift_size, -self.shift_size), dims=(1, 2))
-            
-            #partition of windows
-            r_w, r_hw = window_partition(shifted_r, self.window_size)
-            g_w, g_hw = window_partition(shifted_g, self.window_size)
-            b_w, b_hw = window_partition(shifted_b, self.window_size)
-            ir_w, ir_hw = window_partition(shifted_ir, self.window_size)
-            b2, h2, w2, c2 = r_w.shape
-            # partition windows
-            #x_windows = window_partition(shifted_x, self.window_size)  # nW*B, window_size, window_size, C
-            
-        else:
-            #shifted_x = x
-            # partition windows
-            #x_windows = window_partition(shifted_x, self.window_size)  # nW*B, window_size, window_size, C
-            r_w, r_hw =window_partition(r, window_size)
-            g_w, g_hw = window_partition(g, window_size)
-            b_w, b_hw = window_partition(b, window_size)
-            ir_w, ir_hw = window_partition(ir, window_size)
-            b2, h2, w2, c2 = r_w.shape
+        r, r_hw =window_partition(r, window_size)
+        g, g_hw = window_partition(g, window_size)
+        b, b_hw = window_partition(b, window_size)
+        ir, ir_hw = window_partition(ir, window_size)
+        b2, h2, w2, c2 = r.shape
+        if self.pos_embed != None:
+            r = r + self.pos_embed
+            g = g + self.pos_embed
+            b = b + self.pos_embed
+            ir = ir + self.pos_embed
+        r = r.reshape(b2, h2 * w2, c2)
+        g = g.reshape(b2, h2 * w2, c2)
+        b = b.reshape(b2, h2 * w2, c2)
+        ir = ir.reshape(b2, h2 * w2, c2)
 
-        r_w = r_w.reshape(b2, h2 * w2, c2)
-        g_w = g_w.reshape(b2, h2 * w2, c2)
-        b_w = b_w.reshape(b2, h2 * w2, c2)
-        ir_w = ir_w.reshape(b2, h2 * w2, c2)
+        attn_out = self.r2g_attn(q = r, k =g, v =g)
+        x1 = r + attn_out
+        x1 = self.norm1(x1)
 
-        r_out = self.r2g_attn(q = r_w, k =g_w, v =g_w, dimensions =(h, w), mask =self.attn_mask)
-        #x1 = r + r_out
-        #x1 = self.norm1(x1)
-
-        g_out = self.rg2b_attn(q = g_w, k =b_w, v =b_w, dimensions =(h, w), mask =self.attn_mask)
-        #x2 = g + g_out
-        #x2 = self.norm2(x2)
+        attn_out = self.rg2b_attn(q = g, k =b, v =b)
+        x2 = g + attn_out #g + 
+        #b1 = b + attn_out
+        x2 = self.norm2(x2)
 
 
-        b_out = self.rgb2ir_attn(q =b_w, k =ir_w, v =ir_w, dimensions =(h, w), mask =self.attn_mask)
-        #x3 = b + b_out
-        #x3 = self.norm3(x3)
+        attn_out = self.rgb2ir_attn(q =b, k =ir, v =ir)
+        x3 = b + attn_out #b + 
+        #ir1 = ir + attn_out
+        x3 = self.norm3(x3)
 
-        ir_out = self.ir2rgb_attn(q = ir_w, k =g_w, v =g_w, dimensions =(h, w), mask =self.attn_mask)
-        #x4 = ir + ir_out
-        #x4 = self.norm4(x4)
+        attn_out = self.ir2rgb_attn(q = ir, k =g, v =g )
+        x4 =  ir + attn_out #ir +
+        x4 = self.norm4(x4)
 
-        r_out = r_out.view(b2, h2, w2, c2)
-        g_out = g_out.view(b2, h2, w2, c2)
-        b_out = b_out.view(b2, h2, w2, c2)
-        ir_out = ir_out.view(b2, h2, w2, c2)
 
-        if self.shift_size > 0:
-            shifted_r = window_unpartition(r_out, self.window_size, r_hw, (h, w))  # B H' W' C
-            shifted_g =  window_unpartition(g_out, self.window_size, g_hw, (h, w))
-            shifted_b =  window_unpartition(b_out, self.window_size, b_hw, (h, w))
-            shifted_ir =  window_unpartition(ir_out, self.window_size, ir_hw, (h, w))
-            r_out = torch.roll(shifted_r, shifts=(self.shift_size, self.shift_size), dims=(1, 2))
-            g_out = torch.roll(shifted_g, shifts=(self.shift_size, self.shift_size), dims=(1, 2))
-            b_out = torch.roll(shifted_b, shifts=(self.shift_size, self.shift_size), dims=(1, 2))
-            ir_out = torch.roll(shifted_ir, shifts=(self.shift_size, self.shift_size), dims=(1, 2))
-        else:
-            #shifted_x = window_reverse(attn_windows, self.window_size, H, W)  # B H' W' C
-            r_out = window_unpartition(r_out, self.window_size, r_hw, (h, w))  # B H' W' C
-            g_out =  window_unpartition(g_out, self.window_size, g_hw, (h, w))
-            b_out =  window_unpartition(b_out, self.window_size, b_hw, (h, w))
-            ir_out =  window_unpartition(ir_out, self.window_size, ir_hw, (h, w))
-            #x = shifted_x
 
-        x1 = self.norm1(r + r_out)
-        x2 = self.norm2(g + g_out)
-        x3 = self.norm3(b + b_out)
-        x4 = self.norm4(ir + ir_out)
-        
+        x1 = x1.view(b2, h2, w2, c2)
+        x2 = x2.view(b2, h2, w2, c2)
+        x3 = x3.view(b2, h2, w2, c2)
+        x4 = x4.view(b2, h2, w2, c2)
+
+
+        x1 = window_unpartition(x1, window_size, r_hw, (h, w))
+        x2 = window_unpartition(x2, window_size, g_hw, (h, w))
+        x3 = window_unpartition(x3, window_size, b_hw, (h, w))
+        x4 = window_unpartition(x4, window_size, ir_hw, (h, w))
 
         x = torch.cat((x1, x2, x3, x4), dim=-1)
-        #x = self.mlp(x, h, w)
         # x = self.fc_layer(x)
         # #x = self.dropout(x)
         # x = self.mlp(x)
@@ -7513,7 +7456,7 @@ if __name__ == '__main__':
     # Resume
     wandb_run = check_wandb_resume(opt)
     if opt.resume and not wandb_run:  # resume an interrupted run
-        ckpt = opt.resume if isinstance(opt.resume, str) else get_latest_run('/home/bbahaduri/sryolo/outputs/withoutSR_CC/train/exp5/')  # specified or most recent path
+        ckpt = opt.resume if isinstance(opt.resume, str) else get_latest_run('/home/bbahaduri/sryolo/outputs/withoutSR_CC/train/exp15/')  # specified or most recent path
         assert os.path.isfile(ckpt), 'ERROR: --resume checkpoint does not exist'
         apriori = opt.global_rank, opt.local_rank
         with open(Path(ckpt).parent.parent / 'opt.yaml') as f:

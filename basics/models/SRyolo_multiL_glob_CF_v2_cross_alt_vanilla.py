@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 from .common import *
 # from models.swin_transformer import *
 from .experimental import *
-from .image_encoder_mL_1global_CF_v2_cross_alt_SCC import *  #image_encoder_mL_1global_CF_v2_cross_alt_SCC
+from .image_encoder_mL_1global_CF_v2_cross_alt_vanilla2 import *  #image_encoder_mL_1global_CF_v2_cross_alt_SCC
 # from models.edsr import EDSR
 from ..utils.autoanchor import check_anchor_order
 from ..utils.general import make_divisible, check_file, set_logging
