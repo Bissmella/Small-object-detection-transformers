@@ -34,7 +34,7 @@ from tqdm import tqdm
 # import test_up  # import test.py to get mAP after each epoch
 from basics.test import test
 from basics.models.experimental import attempt_load
-from basics.models.SRyolo_multiL_glob_CF_v2_cross_alt_CC import Model #zjq
+from basics.models.SRyolo_multiL_glob_CF_v2_cross_alt_CC2 import Model #zjq
 from basics.utils.autoanchor import check_anchors
 
 
@@ -109,7 +109,7 @@ def train(hyp, opt, device, tb_writer=None):
         logger.info('Transferred %g/%g items from %s' % (len(state_dict), len(model.state_dict()), weights))  # report
     else:
         model = Model(opt.cfg, input_mode = opt.input_mode ,ch_steam=opt.ch_steam,ch=opt.ch, nc=nc, anchors=hyp.get('anchors'),config=None,sr=opt.super,factor=down_factor).to(device)  # create
-        
+        '''
         #* loading SAM backbone weights
         SAM_weights = torch.load("/home/bbahaduri/sryolo/weights/swinv2_tiny_patch4_window8_256.pth")
         vit_bb = {}
@@ -120,11 +120,11 @@ def train(hyp, opt, device, tb_writer=None):
         model.load_state_dict(vit_bb, strict=False)
         print("related weights loaded from SAM")
         
-        # for name, param in model.named_parameters():
-        #  if name.startswith("image_encoder"):   #* and not name.startswith("image_encoder.patch_embed") and not name.startswith("image_encoder.pos_embed"):
-        #      param.requires_grad = False
-        #      #print(name, param.requires_grad)
-        
+        for name, param in model.named_parameters():
+         if name.startswith("image_encoder"):   #* and not name.startswith("image_encoder.patch_embed") and not name.startswith("image_encoder.pos_embed"):
+             param.requires_grad = False
+             #print(name, param.requires_grad)
+        '''
         
     
     #breakpoint()
@@ -231,16 +231,16 @@ def train(hyp, opt, device, tb_writer=None):
     # Trainloader
     #if not opt.super and not opt.super_attention:
     # if not opt.data.endswith('SRvedai.yaml'):
-    if opt.data.endswith('vedai.yaml') or opt.data.endswith('SRvedai.yaml'):
-        from basics.utils.datasets import create_dataloader_sr as create_dataloader
-    else:
-        from basics.utils.datasets import create_dataloader
+    ##if opt.data.endswith('vedai.yaml') or opt.data.endswith('SRvedai.yaml'):
+    from basics.utils.datasets import create_dataloader_sr as create_dataloader
+    ##else:
+    ##    from basics.utils.datasets import create_dataloader
 
     dataloader, dataset = create_dataloader(train_path, imgsz, batch_size, gs, opt,      #*changed
                                         hyp=hyp, augment=True, cache=opt.cache_images, rect=opt.rect, rank=rank,
                                         #world_size=opt.world_size,
                                         workers=opt.workers,
-                                        image_weights=opt.image_weights, quad=opt.quad, prefix=colorstr('train: '))
+                                        image_weights=opt.image_weights, quad=opt.quad, prefix=colorstr('train: '), fold='labels01')
     # else:
         # dataloader, dataset = create_dataloader_sr(train_path, imgsz, batch_size, gs, opt,
         #                                 hyp=hyp, augment=True, cache=opt.cache_images, rect=opt.rect, rank=rank,
@@ -258,7 +258,8 @@ def train(hyp, opt, device, tb_writer=None):
                                     hyp=hyp, cache=opt.cache_images and not opt.notest, rect=False, rank=-1,
                                     #world_size=opt.world_size, 
                                     workers=opt.workers,pad=0.5,
-                                    prefix=colorstr('val: '))[0]
+                                    prefix=colorstr('val: '),
+                                    fold='labels01')[0]
         # else:
         #     testloader = create_dataloader_sr(test_path, imgsz_test, batch_size, gs, opt,  # testloader
         #                                hyp=hyp, cache=opt.cache_images and not opt.notest, rect=False, rank=-1,
@@ -619,10 +620,10 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     #############################
     parser.add_argument('--weights', type=str, default='', help='initial weights path')
-    parser.add_argument('--cfg', type=str,default='codes/models/SRyolo_SAM_v3_orig_multiL_glob_CF1.yaml', help='model.yaml path') #yolov5s
+    parser.add_argument('--cfg', type=str,default='codes/models/SRyolo_SAM_v3_orig_multiL_glob_CF.yaml', help='model.yaml path') #yolov5s
     parser.add_argument('--super', default=False, action='store_true', help='super resolution')
     parser.add_argument('--data', type=str,default='codes/models/SRvedai.yaml', help='data.yaml path')
-    parser.add_argument('--hyp', type=str, default='codes/models/hyp.scratch.yaml', help='hyperparameters path')
+    parser.add_argument('--hyp', type=str, default='codes/models/hyp.scratchs.yaml', help='hyperparameters path')
     parser.add_argument('--epochs', type=int, default=300)          #*changed default 300
     parser.add_argument('--ch_steam', type=int, default=3)
     parser.add_argument('--ch', type=int,default=128, help = '3 4 16 midfusion1:64 midfusion2,3:128 midfusion4:256')  #*changed from default to match SAM
@@ -647,7 +648,7 @@ if __name__ == '__main__':
     parser.add_argument('--sync-bn', action='store_true', help='use SyncBatchNorm, only available in DDP mode')
     parser.add_argument('--local_rank', type=int, default=-1, help='DDP parameter, do not modify')
     parser.add_argument('--workers', type=int, default=4, help='maximum number of dataloader workers')
-    parser.add_argument('--project', default='outputs_SAM/yoloSAM_v2_p6_multiL_RGBIR_glob_CF_v2_swinv2/run/train', help='save to project/name')
+    parser.add_argument('--project', default='outputs_SAM/yoloSAM_v2_p6_multiL_RGBIR_glob_CF_v2_ViT1/run/train', help='save to project/name')
     parser.add_argument('--entity', default=None, help='W&B entity')
     parser.add_argument('--name', default='exp', help='save to project/name')
     parser.add_argument('--exist-ok', action='store_true', help='existing project/name ok, do not increment')
@@ -674,7 +675,7 @@ if __name__ == '__main__':
     # Resume
     wandb_run = check_wandb_resume(opt)
     if opt.resume and not wandb_run:  # resume an interrupted run
-        ckpt = opt.resume if isinstance(opt.resume, str) else get_latest_run('/home/bbahaduri/sryolo/outputs_SAM/yoloSAM_v2_p6_multiL_RGBIR_glob_CF_v2_final/run/train/exp25/')  # specified or most recent path
+        ckpt = opt.resume if isinstance(opt.resume, str) else get_latest_run('/home/bbahaduri/sryolo/outputs_SAM/yoloSAM_v2_p6_multiL_RGBIR_glob_CF_v2_final2/run/train/exp9/')  # specified or most recent path
         assert os.path.isfile(ckpt), 'ERROR: --resume checkpoint does not exist'
         apriori = opt.global_rank, opt.local_rank
         with open(Path(ckpt).parent.parent / 'opt.yaml') as f:

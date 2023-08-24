@@ -50,13 +50,13 @@ class ImageEncoderViT(nn.Module):
         """
         super().__init__()
         self.img_size = img_size
-        # self.patch_embed = PatchEmbed(
-        #     kernel_size=(1, 1),  #patch_size
-        #     stride=(1, 1),         #* previoulsy 4  changed from patch_size, patch_size to 8, 8 to get half-overlapping 64 x 64 dimension patches
-        #     padding = (0, 0),
-        #     in_chans=192,
-        #     embed_dim=embed_dim,
-        # )
+        self.patch_embed = PatchEmbed(
+            kernel_size=(1, 1),  #patch_size
+            stride=(1, 1),         #* previoulsy 4  changed from patch_size, patch_size to 8, 8 to get half-overlapping 64 x 64 dimension patches
+            padding = (0, 0),
+            in_chans=96,
+            embed_dim=96,
+        )
 
         # self.pos_embed: Optional[nn.Parameter] = None
         # if use_abs_pos:
@@ -68,48 +68,52 @@ class ImageEncoderViT(nn.Module):
         
         
         # #for channel attention
-        # self.channel_embed_r = PatchEmbed(
-        #     kernel_size = (patch_size, patch_size),
-        #     stride = (4, 4),
-        #     in_chans = 1,
-        #     embed_dim = 48,
-        # )
+        self.channel_embed_r = PatchEmbed(
+            kernel_size = (patch_size, patch_size),
+            stride = (4, 4),
+            padding = (0, 0),
+            in_chans = 1,
+            embed_dim = 24,
+        )
 
-        # self.channel_embed_g = PatchEmbed(
-        #     kernel_size = (patch_size, patch_size),
-        #     stride = (4, 4),
-        #     in_chans = 1,
-        #     embed_dim = 48,
-        # )
+        self.channel_embed_g = PatchEmbed(
+            kernel_size = (patch_size, patch_size),
+            stride = (4, 4),
+            padding = (0, 0),
+            in_chans = 1,
+            embed_dim = 24,
+        )
 
-        # self.channel_embed_b = PatchEmbed(
-        #     kernel_size = (patch_size, patch_size),
-        #     stride = (4, 4),
-        #     in_chans = 1,
-        #     embed_dim = 48,
-        # )
+        self.channel_embed_b = PatchEmbed(
+            kernel_size = (patch_size, patch_size),
+            stride = (4, 4),
+            padding = (0, 0),
+            in_chans = 1,
+            embed_dim = 24,
+        )
 
-        # self.channel_embed_i = PatchEmbed(
-        #     kernel_size = (patch_size, patch_size),
-        #     stride = (4, 4),
-        #     in_chans = 1,
-        #     embed_dim = 48,
-        # )
+        self.channel_embed_i = PatchEmbed(
+            kernel_size = (patch_size, patch_size),
+            stride = (4, 4),
+            padding = (0, 0),
+            in_chans = 1,
+            embed_dim = 24,
+        )
         
-        # self.chan_block = CAttentionBlock(
-        #         embedding_dim = 48,
-        #         num_heads = num_heads,
-        #     )
+        self.chan_block = CAttentionBlock(
+                embedding_dim = 24,
+                num_heads = num_heads,
+            )
 
         embed_dim =96
         
         norm_layer=nn.LayerNorm
         self.patch_norm=True 
-        self.patch_embed = PatchEmbed(
-            img_size=img_size, patch_size=4, in_chans=4, embed_dim=96,
-            norm_layer=norm_layer if self.patch_norm else None)
-        num_patches = self.patch_embed.num_patches
-        patches_resolution = self.patch_embed.patches_resolution
+        # self.patch_embed = PatchEmbed(
+        #     img_size=img_size, patch_size=4, in_chans=4, embed_dim=96,
+        #     norm_layer=norm_layer if self.patch_norm else None)
+        num_patches = 128 * 128#self.patch_embed.num_patches
+        patches_resolution = [128, 128]#self.patch_embed.patches_resolution
         self.patches_resolution = patches_resolution
 
         
@@ -183,16 +187,19 @@ class ImageEncoderViT(nn.Module):
         
         ##patches = self.patch_embed(x)
         
-        # r, g ,b, i = get_channels(x)
-        # r = self.channel_embed_r(r)#.unsqueeze(1)      #x1[:,0,:,:].unsqueeze(1)).view(bs, 1, 1, 1536)
-        # g = self.channel_embed_g(g)#.unsqueeze(1)      #x1[:,1,:,:].unsqueeze(1)).view(bs, 1, 1, 1536)
-        # b = self.channel_embed_b(b)#.unsqueeze(1)      #x1[:,2,:,:].unsqueeze(1)).view(bs, 1, 1, 1536)
-        # i = self.channel_embed_i(i)#.unsqueeze(1)       #x1[:,3,:,:].unsqueeze(1)).view(bs, 1, 1, 1536)
+        r, g ,b, i = get_channels(x)
+        r = self.channel_embed_r(r)#.unsqueeze(1)      #x1[:,0,:,:].unsqueeze(1)).view(bs, 1, 1, 1536)
+        g = self.channel_embed_g(g)#.unsqueeze(1)      #x1[:,1,:,:].unsqueeze(1)).view(bs, 1, 1, 1536)
+        b = self.channel_embed_b(b)#.unsqueeze(1)      #x1[:,2,:,:].unsqueeze(1)).view(bs, 1, 1, 1536)
+        i = self.channel_embed_i(i)#.unsqueeze(1)       #x1[:,3,:,:].unsqueeze(1)).view(bs, 1, 1, 1536)
 
-        # x = self.chan_block(r, g, b, i)
-        # x = x.permute(0, 3, 1, 2)
-        
+        x = self.chan_block(r, g, b, i)
+        x = x.permute(0, 3, 1, 2)
+
         x = self.patch_embed(x)
+
+        b, h, w, c = x.shape
+        x = x.view(b, h * w, c).contiguous()
 
 
 
@@ -480,7 +487,7 @@ class CAttention(nn.Module):
                 self.embedding_dim = embedding_dim
                 self.num_heads = num_heads
 
-                self.v_proj = nn.Linear(embedding_dim, embedding_dim)
+                #self.v_proj = nn.Linear(embedding_dim, embedding_dim)
 
     def _separate_heads(self, x: torch.Tensor, num_heads: int) -> torch.Tensor:
         b, n, c = x.shape
@@ -635,7 +642,7 @@ def add_decomposed_rel_pos(
 
 
 
-'''
+
 class PatchEmbed(nn.Module):
     """
     Image to Patch Embedding.
@@ -717,7 +724,7 @@ class PatchEmbed(nn.Module):
         if self.norm is not None:
             flops += Ho * Wo * self.embed_dim
         return flops
-
+'''
 
 class ChanEmbed(nn.Module):
     """
@@ -1033,6 +1040,7 @@ class SwinTransformerBlock(nn.Module):
     def forward(self, x):
         H, W = self.input_resolution
         B, L, C = x.shape
+
         assert L == H * W, "input feature has wrong size"
 
         shortcut = x

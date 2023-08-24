@@ -87,7 +87,7 @@ def create_dataloader(path, imgsz, batch_size, stride, opt, hyp=None, augment=Fa
     return dataloader, dataset
 
 def create_dataloader_sr(path, imgsz, batch_size, stride, opt, hyp=None, augment=False, cache=False, pad=0.0, rect=False,
-                      rank=-1, world_size=1, workers=8, image_weights=False, quad=False, prefix=''):
+                      rank=-1, world_size=1, workers=8, image_weights=False, quad=False, prefix='', fold='labels'):
     # Make sure only the first process in DDP process the dataset first, and the following others can use the cache
     with torch_distributed_zero_first(rank):
         dataset = LoadImagesAndLabels_sr(path, imgsz, batch_size,
@@ -99,7 +99,8 @@ def create_dataloader_sr(path, imgsz, batch_size, stride, opt, hyp=None, augment
                                       stride=int(stride),
                                       pad=pad,
                                       image_weights=image_weights,
-                                      prefix=prefix)
+                                      prefix=prefix,
+                                      fold = fold)
 
     batch_size = min(batch_size, len(dataset))
     nw = min([os.cpu_count() // world_size, batch_size if batch_size > 1 else 0, workers])  # number of workers
@@ -401,7 +402,7 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
             #     if i+'\n' in self.img_files:
             #         self.img_files.remove(i+'\n')
             for j in range(len(self.img_files)):
-                self.img_files[j] = self.img_path + self.img_files[j].rstrip() + '_co.png' #self.img_files[j].rstrip() + '_co.png'  #self.img_path + self.img_files[j].rstrip() + '_co.png'
+                self.img_files[j] =  self.img_files[j].rstrip() + '_co.png' ##self.img_path +  #self.img_files[j].rstrip() + '_co.png'  #self.img_path + self.img_files[j].rstrip() + '_co.png'
 
         # Check cache
         self.label_files = img2label_paths(self.img_files)  # labels
@@ -665,7 +666,7 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
 
 class LoadImagesAndLabels_sr(Dataset):  # for training/testing
     def __init__(self, path, img_size=640, batch_size=16, augment=False, hyp=None, rect=False, image_weights=False,
-                 cache_images=False, single_cls=False, stride=32, pad=0.0, prefix=''):
+                 cache_images=False, single_cls=False, stride=32, pad=0.0, prefix='', fold = 'labels'):
         self.img_size = img_size
         self.augment = augment
         self.hyp = hyp
@@ -686,7 +687,8 @@ class LoadImagesAndLabels_sr(Dataset):  # for training/testing
         # Check cache
         self.label_files = img2label_paths(self.img_files)  # labels
         self.ir_files = img2ir_paths(self.img_files)
-        cache_path = Path(self.label_files[0]).parent.with_suffix('.cache')  # cached labels
+        cache_path = fold + '.cache'
+        cache_path = Path(self.label_files[0]).parent / cache_path#.with_suffix('.cache')  # cached labels
         if cache_path.is_file():
             cache = torch.load(cache_path)  # load
             if cache['hash'] != get_hash(self.label_files + self.img_files + self.ir_files) or 'results' not in cache:  # changed #zjq

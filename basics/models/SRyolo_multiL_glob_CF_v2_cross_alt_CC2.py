@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 from .common import *
 # from models.swin_transformer import *
 from .experimental import *
-from .image_encoder_mL_1global_CF_v2_swinv2 import *  #image_encoder_mL_1global_CF_v2_cross_alt_SCC
+from .image_encoder_mL_1global_CF_v2_cross_alt_SCC2 import *  #image_encoder_mL_1global_CF_v2_cross_alt_SCC
 # from models.edsr import EDSR
 from ..utils.autoanchor import check_anchor_order
 from ..utils.general import make_divisible, check_file, set_logging
@@ -126,7 +126,8 @@ class Model(nn.Module):
         if isinstance(m, Detect):
             s = 256  # 2x min stride
             #m.stride = torch.tensor([s / x.shape[-2] for x in self.forward(torch.zeros(1, ch_steam, s, s),torch.zeros(1, ch_steam, s, s),input_mode)[0]])  # forward
-            m.stride = torch.tensor([4.])#([s / x.shape[-2] for x in self.forward(torch.zeros(1, ch_steam, s, s),torch.zeros(1, ch_steam, s, s),input_mode)[0]])  # forward
+            
+            m.stride = torch.tensor([ 4.])#([s / x.shape[-2] for x in self.forward(torch.zeros(1, ch_steam, s, s),torch.zeros(1, ch_steam, s, s),input_mode)[0]])  # forward
             m.anchors /= m.stride.view(-1, 1, 1)
             check_anchor_order(m)
             self.stride = m.stride
@@ -274,7 +275,9 @@ class Model(nn.Module):
                         _ = m(x)
                     dt.append((time_synchronized() - t) * 100)
                     print('%10.1f%10.0f%10.1fms %-40s' % (o, m.np, dt[-1], m.type))
+
                 x = m(x)  # run
+
                 y.append(x)
                 
 
@@ -365,7 +368,7 @@ def parse_model(d, string, ch,config):  # model_dict, input_channels(3)
     else:
         d_ = d[stri[-1]]
     if string == 'head':
-        ch[0] = 128
+        ch[0] = 256
         ch.append(256)
         ch.append(512)
     for i, (f, n, m, args) in enumerate(d_):  # from, number, module, args

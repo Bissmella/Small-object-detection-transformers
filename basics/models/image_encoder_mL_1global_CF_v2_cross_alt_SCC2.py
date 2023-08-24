@@ -76,6 +76,7 @@ class ImageEncoderViT(nn.Module):
         self.channel_embed_g = PatchEmbed(
             kernel_size = (patch_size, patch_size),
             stride = (4, 4),
+            padding = (0, 0),
             in_chans = 1,
             embed_dim = 48,
         )
@@ -83,6 +84,7 @@ class ImageEncoderViT(nn.Module):
         self.channel_embed_b = PatchEmbed(
             kernel_size = (patch_size, patch_size),
             stride = (4, 4),
+            padding = (0, 0),
             in_chans = 1,
             embed_dim = 48,
         )
@@ -90,6 +92,7 @@ class ImageEncoderViT(nn.Module):
         self.channel_embed_i = PatchEmbed(
             kernel_size = (patch_size, patch_size),
             stride = (4, 4),
+            padding = (0, 0),
             in_chans = 1,
             embed_dim = 48,
         )
@@ -389,12 +392,13 @@ class ImageEncoderViT(nn.Module):
         z= []
         for i in range(len(self.stage1)):
             x = self.stage1[i](x)
-            if i in (2, 3):
+            if i in (4, 5):
                 x = x.view(bs, h, w, c)
                 z.append(x)
                 x = x.view(bs, h * w, c)
-        
+        #x = x.view(bs, h, w, c)
         y.append(torch.cat(z, dim=-1))
+        #x = x.view(bs, h * w, c)
         #x = x.view(bs, h * w, c)
         x = self.pmerging1(x, (h, w))
 
@@ -422,9 +426,9 @@ class ImageEncoderViT(nn.Module):
         W = y[0].shape[2]
         Wg = x.shape[2]
         #y[0] = y[0] + x
-        y[0] = self.neck1(y[0].permute(0, 3, 1, 2)) ##[:, :, torch.arange(W) % 5 != 4,:]
-        y[1] = self.neck2(y[1].permute(0, 3, 1, 2)) #F.interpolate(, scale_factor=2, mode='bilinear', align_corners=False)) #  ##[:, :, torch.arange(W) % 5 != 4,:]
-        y[2] =  self.neck3(y[2].permute(0, 3, 1, 2))#F.interpolate(, scale_factor=4, mode='bilinear', align_corners=False))    #  ##[:, :, torch.arange(Wg) % 5 != 4,:]
+        y[0] = self.neck1(y[0].permute(0, 3, 1, 2))#self.neck1() ##[:, :, torch.arange(W) % 5 != 4,:]
+        y[1] = self.neck2(y[1].permute(0, 3, 1, 2)) #F.interpolate(, scale_factor=2, mode='bilinear', align_corners=False) #  ##[:, :, torch.arange(W) % 5 != 4,:]
+        y[2] =  self.neck3(y[2].permute(0, 3, 1, 2)) #F.interpolate(, scale_factor=4, mode='bilinear', align_corners=False)    #  ##[:, :, torch.arange(Wg) % 5 != 4,:]
         #y[0] = y[0] + y[2]
         return y
 
@@ -603,7 +607,7 @@ class CAttentionBlock(nn.Module):
 
         #self.mlp = Mlp(out_dim, out_dim * 4, out_dim, linear_mlp=True)
         
-        self.window_size = 2
+        self.window_size = 1
         self.input_resolution = (128, 128)
         self.shift_size = shift_size
         if self.shift_size > 0:
@@ -634,7 +638,7 @@ class CAttentionBlock(nn.Module):
         # self.mlp = MLPBlock(out_dim, 256, activation)
         # self.norm5 = nn.LayerNorm(out_dim)
 
-    def forward(self, r: torch.Tensor, g: torch.Tensor, b: torch.Tensor, ir: torch.Tensor, window_size:int = 2):
+    def forward(self, r: torch.Tensor, g: torch.Tensor, b: torch.Tensor, ir: torch.Tensor, window_size:int = 1):
         b1, h, w, c = r.shape
         # r, r_hw =window_partition(r, window_size)
         # g, g_hw = window_partition(g, window_size)
@@ -662,10 +666,10 @@ class CAttentionBlock(nn.Module):
             #shifted_x = x
             # partition windows
             #x_windows = window_partition(shifted_x, self.window_size)  # nW*B, window_size, window_size, C
-            r_w, r_hw =window_partition(r, window_size)
-            g_w, g_hw = window_partition(g, window_size)
-            b_w, b_hw = window_partition(b, window_size)
-            ir_w, ir_hw = window_partition(ir, window_size)
+            r_w, r_hw =window_partition(r, self.window_size)
+            g_w, g_hw = window_partition(g, self.window_size)
+            b_w, b_hw = window_partition(b, self.window_size)
+            ir_w, ir_hw = window_partition(ir, self.window_size)
             b2, h2, w2, c2 = r_w.shape
 
         r_w = r_w.reshape(b2, h2 * w2, c2)
@@ -706,7 +710,9 @@ class CAttentionBlock(nn.Module):
             ir_out = torch.roll(shifted_ir, shifts=(self.shift_size, self.shift_size), dims=(1, 2))
         else:
             #shifted_x = window_reverse(attn_windows, self.window_size, H, W)  # B H' W' C
+
             r_out = window_unpartition(r_out, self.window_size, r_hw, (h, w))  # B H' W' C
+
             g_out =  window_unpartition(g_out, self.window_size, g_hw, (h, w))
             b_out =  window_unpartition(b_out, self.window_size, b_hw, (h, w))
             ir_out =  window_unpartition(ir_out, self.window_size, ir_hw, (h, w))
@@ -843,6 +849,7 @@ class CAttention(nn.Module):
         #output
         out = attn @ v
         out = self._recombine_heads(out)
+
         #out = out + self.mlp(out, dimensions[0], dimensions[1])  #128 is hard coded height and width
         return out
 
