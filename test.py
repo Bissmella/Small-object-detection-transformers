@@ -16,6 +16,7 @@ from basics.utils.general import coco80_to_coco91_class, check_dataset, check_fi
 from basics.utils.metrics import ap_per_class, ConfusionMatrix
 from basics.utils.plots import plot_images, output_to_target, plot_study_txt
 from basics.utils.torch_utils import select_device, time_synchronized
+from Train_SR import Model, MF, SE_Block, Conv, C3, Bottleneck, SPP, Concat, Detect, DeepLab, Decoder, EDSR, ResBlock, Upsampler
 import torch.nn.functional as F
 from torchvision import transforms
 from PIL import Image
@@ -65,7 +66,7 @@ def test(data,
         model = attempt_load(weights, map_location=device)  # load FP32 model
         #zjq
         # print(model)
-        print(model.yaml_file)
+        #print(model.yaml_file)
         # import thop
         # input_image_size = opt.img_size
         # input_image = torch.randn(1, 3, input_image_size, input_image_size).to(device)
@@ -77,7 +78,7 @@ def test(data,
         #print('Layers: %.0f'%(len(list(model.modules()))))
         gs = 4#max(int(model.stride.max()), 32)  # grid size (max stride)
         imgsz = check_img_size(imgsz, s=gs)  # check img_size
-        breakpoint()
+
         # Multi-GPU disabled, incompatible with .half() https://github.com/ultralytics/yolov5/issues/99
         # if device.type != 'cpu' and torch.cuda.device_count() > 1:
         #     model = nn.DataParallel(model)
@@ -110,7 +111,7 @@ def test(data,
         #     model(torch.zeros(1, 3, imgsz, imgsz).to(device).type_as(next(model.parameters())))  # run once
         task = opt.task if opt.task in ('train', 'val', 'test') else 'val'  # path to train/val/test images
         dataloader = create_dataloader_sr(data[task], imgsz, batch_size, gs, opt, pad=0.0, rect=True, ##pad = 0.5
-                            prefix=colorstr(f'{task}: '), fold='labels02')[0]
+                            prefix=colorstr(f'{task}: '), fold='labels')[0]
 
     seen = 0
     confusion_matrix = ConfusionMatrix(nc=nc)
@@ -121,7 +122,7 @@ def test(data,
     loss = torch.zeros(3, device=device)
     jdict, stats, ap, ap_class, wandb_images = [], [], [], [], []
     for batch_i, (img, ir, targets, paths, shapes) in enumerate(tqdm(dataloader, desc=s)): #zjq
-        breakpoint()
+
         img = img.to(device, non_blocking=True).float()
         # img = img.half() if half else img.float()  # uint8 to fp16/32
         img /= 255.0  # 0 - 255 to 0.0 - 1.0
@@ -132,7 +133,7 @@ def test(data,
         nb, _, height, width = img.shape  # batch size, channels, height, width
         #img=F.interpolate(img,size=[i//2 for i in img.size()[2:]], mode='bilinear', align_corners=True)  #* added for SAM backbone
         #img=F.interpolate(img,size=[i*2 for i in img.size()[2:]], mode='bilinear', align_corners=True)  #* added for SAM backbone
-        breakpoint()
+
         with torch.no_grad():
             # Run model
             t = time_synchronized()
@@ -348,15 +349,15 @@ def test(data,
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(prog='test.py')
-    parser.add_argument('--weights', nargs='+', type=str, default='/home/bbahaduri/sryolo/outputs_SAM/yoloSAM_v2_p6_multiL_RGBIR_glob_CF_v2_ViT1/run/train/exp13/weights/best.pt', help='model.pt path(s)')
-    parser.add_argument('--data', type=str, default='codes/models/SRvedai2.yaml', help='*.data path')
-    parser.add_argument('--batch-size', type=int, default=1, help='size of each image batch')
+    parser.add_argument('--weights', nargs='+', type=str, default='/home/bbahaduri/sryolo/outputs/train_SR/train/exp3/weights/best.pt', help='model.pt path(s)')
+    parser.add_argument('--data', type=str, default='codes/models/SRvedai.yaml', help='*.data path')
+    parser.add_argument('--batch-size', type=int, default=6, help='size of each image batch')
     parser.add_argument('--img-size', type=int, default=512, help='inference size (pixels)')
-    parser.add_argument('--input_mode', type=str, default='RGB+IR') #RGB IR RGB+IR RGB+IR+fusion
+    parser.add_argument('--input_mode', type=str, default='RGB+IR+MF') #RGB IR RGB+IR RGB+IR+fusion
     parser.add_argument('--conf-thres', type=float, default=0.001, help='object confidence threshold')
     parser.add_argument('--iou-thres', type=float, default=0.6, help='IOU threshold for NMS')
     parser.add_argument('--task', default='test', help='train, val, test, speed or study')
-    parser.add_argument('--device', default='cpu', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
+    parser.add_argument('--device', default='0', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
     parser.add_argument('--single-cls', action='store_true', help='treat as single-class dataset')
     parser.add_argument('--augment', action='store_true', help='augmented inference')
     parser.add_argument('--verbose', action='store_true', help='report mAP by class')
@@ -364,7 +365,7 @@ if __name__ == '__main__':
     parser.add_argument('--save-hybrid', action='store_true', help='save label+prediction hybrid results to *.txt')
     parser.add_argument('--save-conf', action='store_true', help='save confidences in --save-txt labels')
     parser.add_argument('--save-json', action='store_true', help='save a cocoapi-compatible JSON results file')
-    parser.add_argument('--project', default='outputs_SAM/yoloSAM_v2_p6_multiL_RGBIR_glob_CF_v2_ViT1/run/test', help='save to project/name')
+    parser.add_argument('--project', default='/home/bbahaduri/sryolo/outputs/sryolo/test', help='save to project/name')
     parser.add_argument('--name', default='exp', help='save to project/name')
     parser.add_argument('--exist-ok', action='store_true', help='existing project/name ok, do not increment')
     opt = parser.parse_args()
