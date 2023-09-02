@@ -1,5 +1,5 @@
-# SuperYolo
-Based on SuperYolo (https://github.com/icey-zhang/SuperYOLO) and YOLOv5 (https://github.com/ultralytics/yolov5) 
+# Multi-modal object detection in aerial images using transformers
+
 
 Dataset: VEDAI dataset https://pan.baidu.com/s/1L0SWi5AQA6ZK9jDIWRY7Fg
 
