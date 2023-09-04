@@ -6,14 +6,14 @@ import sys
 from copy import deepcopy
 import scipy.io as sio
 from torch import mode
-
+import inspect
 sys.path.append('./')  # to run '$ python *.py' files in subdirectories
 logger = logging.getLogger(__name__)
 
 from .common import *
 # from models.swin_transformer import *
 from .experimental import *
-from .image_encoder_half_overlapping import *
+from .backbone_vit import *  #image_encoder_mL_1global_CF_v2_cross_alt_SCC
 # from models.edsr import EDSR
 from ..utils.autoanchor import check_anchor_order
 from ..utils.general import make_divisible, check_file, set_logging
@@ -74,6 +74,17 @@ class Model(nn.Module):
     export = False  # onnx export
     def __init__(self, cfg='yolov5s.yaml',input_mode='RGB',ch_steam=3, ch=3, nc=None, anchors=None,config=None,sr=False,factor=2):  #att=False,sr_att=False model, input channels, number of classes
         super(Model, self).__init__()
+        self.init_params = {
+            'cfg' : cfg,
+            'input_mode' : input_mode,
+            'ch_steam' : ch_steam,
+            'ch': ch,
+            'nc' : nc,
+            'anchors' : anchors,
+            'config' : config,
+            'sr' : sr,
+            'factor' : factor
+        }
         if isinstance(cfg, dict):
             self.yaml = cfg  # model dict
         else:  # is *.yaml
@@ -115,11 +126,13 @@ class Model(nn.Module):
         if isinstance(m, Detect):
             s = 256  # 2x min stride
             #m.stride = torch.tensor([s / x.shape[-2] for x in self.forward(torch.zeros(1, ch_steam, s, s),torch.zeros(1, ch_steam, s, s),input_mode)[0]])  # forward
-            m.stride = torch.tensor([s / x.shape[-2] for x in self.forward(torch.zeros(1, ch_steam, s, s),torch.zeros(1, ch_steam, s, s),input_mode)[0]])  # forward
+            
+            m.stride = torch.tensor([ 4.])#([s / x.shape[-2] for x in self.forward(torch.zeros(1, ch_steam, s, s),torch.zeros(1, ch_steam, s, s),input_mode)[0]])  # forward
             m.anchors /= m.stride.view(-1, 1, 1)
             check_anchor_order(m)
             self.stride = m.stride
             self._initialize_biases()  # only run once
+
         # m = self.model[-2]  # Detect()
         # if isinstance(m, Detect):
         #     s = 256  # 2x min stride
@@ -199,6 +212,7 @@ class Model(nn.Module):
 
 
 
+
     
     def forward_once(self, x, string, profile=False):
         y, dt = [], []  # outputs
@@ -227,8 +241,9 @@ class Model(nn.Module):
                          _ = m(x)
                      dt.append((time_synchronized() - t) * 100)
                      print('%10.1f%10.0f%10.1fms %-40s' % (o, m.np, dt[-1], m.type))
+
             x = self.image_encoder(x)
-            y.append(x)
+            y.extend(x)
             '''
             m = self.detect
             if profile:
@@ -249,6 +264,7 @@ class Model(nn.Module):
                      dt.append((time_synchronized() - t) * 100)
                      print('%10.1f%10.0f%10.1fms %-40s' % (o, m.np, dt[-1], m.type))
             '''
+
             for m in self.detect:
                 if m.f != -1:  # if not from previous layer
                     x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]  # from earlier layers
@@ -261,6 +277,7 @@ class Model(nn.Module):
                     print('%10.1f%10.0f%10.1fms %-40s' % (o, m.np, dt[-1], m.type))
 
                 x = m(x)  # run
+
                 y.append(x)
                 
 
@@ -302,7 +319,7 @@ class Model(nn.Module):
 
     def fuse(self):  # fuse model Conv2d() + BatchNorm2d() layers
         print('Fusing layers... ')
-        for m in self.model.modules():
+        for m in self.modules(): ##self.model.modules
             if (type(m) is Conv) and hasattr(m, 'bn'):
                 m.conv = fuse_conv_and_bn(m.conv, m.bn)  # update conv
                 delattr(m, 'bn')  # remove batchnorm
@@ -351,7 +368,9 @@ def parse_model(d, string, ch,config):  # model_dict, input_channels(3)
     else:
         d_ = d[stri[-1]]
     if string == 'head':
+        ch[0] = 256
         ch.append(256)
+        ch.append(512)
     for i, (f, n, m, args) in enumerate(d_):  # from, number, module, args
         m = eval(m) if isinstance(m, str) else m  # eval strings
         for j, a in enumerate(args):
@@ -389,7 +408,7 @@ def parse_model(d, string, ch,config):  # model_dict, input_channels(3)
         elif m is nn.BatchNorm2d:
             args = [ch[f]]
         elif m is Concat:# or m is SAM:
-            c2 = sum([ch[x if x < 0 else x + 1] for x in f])
+            c2 = sum([ch[x if x < 0 else x] for x in f]) #**removed +1 before x +1
         elif m is Detect:
             args.append([ch[x] for x in f])   #*changed removed + 1
             if isinstance(args[1], int):  # number of anchors
@@ -403,8 +422,8 @@ def parse_model(d, string, ch,config):  # model_dict, input_channels(3)
         else:
             c2 = ch[f if f < 0 else f + 1]
 
-        if string == 'backbone':                                   #* lines used for customized version of SAM
-            m_ = m()
+        if string == 'backbone':
+            m_ = m(img_size = args[0], patch_size=4, embed_dim= args[2], in_chans= args[3], out_chans=args[4], window_size= args[5])
         else:
             m_ = nn.Sequential(*[m(*args) for _ in range(n)]) if n > 1 else m(*args)  # module
         t = str(m)[8:-2].replace('__main__.', '')  # module type

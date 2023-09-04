@@ -34,7 +34,7 @@ from tqdm import tqdm
 # import test_up  # import test.py to get mAP after each epoch
 from basics.test import test
 from basics.models.experimental import attempt_load
-from basics.models.SRyolo_multiL_glob_CF_v2_cross_alt_CC2 import Model #zjq
+from basics.models.model import Model #zjq
 from basics.utils.autoanchor import check_anchors
 
 
