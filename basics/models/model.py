@@ -149,7 +149,7 @@ class Model(nn.Module):
         
     
     def forward(self, x, ir=torch.randn(1,3,512,512), input_mode='RGB+IR', augment=False, profile=False):
-        # input_mode = 'RGB+IR' #IRRGB
+
         if input_mode=='RGB':
             ir=x
         if augment:
@@ -312,10 +312,7 @@ class Model(nn.Module):
             b = mi.bias.detach().view(m.na, -1).T  # conv.bias(255) to (3,85)
             print(('%6g Conv2d.bias:' + '%10.3g' * 6) % (mi.weight.shape[1], *b[:5].mean(1).tolist(), b[5:].mean()))
 
-    # def _print_weights(self):
-    #     for m in self.model.modules():
-    #         if type(m) is Bottleneck:
-    #             print('%10.3g' % (m.w.detach().sigmoid() * 2))  # shortcut weights
+
 
     def fuse(self):  # fuse model Conv2d() + BatchNorm2d() layers
         print('Fusing layers... ')
@@ -437,29 +434,3 @@ def parse_model(d, string, ch,config):  # model_dict, input_channels(3)
         return layers[0], sorted(save) #*changed  nn.Sequential(*layers) to layers[0]
     return nn.Sequential(*layers), sorted(save)
 
-# if __name__ == '__main__':
-#     parser = argparse.ArgumentParser()
-#     #parser = argparse.ArgumentParser('Set transformer detector', add_help=False)    #newly added
-#     parser.add_argument('--temp', default = 'something', type = str, help='it is nothing')
-#     parser.add_argument('--cfg', default='yolov5s.yaml', type=str, help='model.yaml')
-#     parser.add_argument('--device', default='cuda', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
-#     #opt = parser.parse_args()
-#     opt, _ = parser.parse_known_args()
-#     opt.cfg = check_file(opt.cfg)  # check file
-#     set_logging()
-#     device = select_device(opt.device)
-
-#     # Create model
-#     model = Model(opt.cfg).to(device)
-#     model.train()
-
-    # Profile
-    # img = torch.rand(8 if torch.cuda.is_available() else 1, 3, 640, 640).to(device)
-    # y = model(img, profile=True)
-
-    # Tensorboard
-    # from torch.utils.tensorboard import SummaryWriter
-    # tb_writer = SummaryWriter()
-    # print("Run 'tensorboard --logdir=models/runs' to view tensorboard at http://localhost:6006/")
-    # tb_writer.add_graph(model.model, img)  # add model to tensorboard
-    # tb_writer.add_image('test', img[0], dataformats='CWH')  # add model to tensorboard

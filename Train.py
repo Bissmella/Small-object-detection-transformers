@@ -1,12 +1,7 @@
 # -*- coding: utf-8 -*-
-#SuperYolo with SAM image encoder backbone
-#used for training SRyolo with SAM backbone RGB mode SAM's original config (stride 16) but without loading SAM weights
-#this is file for experiment for comparing the overlapping and non-overlapping patches.
+# Multi-modal transformer for object detection in hyper-spectral aerial images
 
 
-#@title SAM_Image_Encoder
-#from basics.models.image_encoder_mL_1global import ImageEncoderViT, PatchEmbed, Block, Attention
-#from basics.models.SAM_commons import MLPBlock, LayerNorm2d
 
 
 import argparse
@@ -109,25 +104,10 @@ def train(hyp, opt, device, tb_writer=None):
         logger.info('Transferred %g/%g items from %s' % (len(state_dict), len(model.state_dict()), weights))  # report
     else:
         model = Model(opt.cfg, input_mode = opt.input_mode ,ch_steam=opt.ch_steam,ch=opt.ch, nc=nc, anchors=hyp.get('anchors'),config=None,sr=opt.super,factor=down_factor).to(device)  # create
-        '''
-        #* loading SAM backbone weights
-        SAM_weights = torch.load("/home/bbahaduri/sryolo/weights/swinv2_tiny_patch4_window8_256.pth")
-        vit_bb = {}
-        for key in SAM_weights.keys():
-            if key.startswith("image_encoder"):     #* and not key.startswith("image_encoder.patch_embed") and not key.startswith("image_encoder.pos_embed"): 
-                print(key)
-                vit_bb[key] = SAM_weights[key]
-        model.load_state_dict(vit_bb, strict=False)
-        print("related weights loaded from SAM")
-        
-        for name, param in model.named_parameters():
-         if name.startswith("image_encoder"):   #* and not name.startswith("image_encoder.patch_embed") and not name.startswith("image_encoder.pos_embed"):
-             param.requires_grad = False
-             #print(name, param.requires_grad)
-        '''
+       
         
     
-    #breakpoint()
+
     with torch_distributed_zero_first(rank):
         check_dataset(data_dict)  # check
     train_path = data_dict['train']
@@ -420,7 +400,7 @@ def train(hyp, opt, device, tb_writer=None):
                     ns = [math.ceil(x * sf / gs) * gs for x in imgs.shape[2:]]  # new shape (stretched to gs-multiple)
                     imgs = F.interpolate(imgs, size=ns, mode='bilinear', align_corners=False) 
                     irs = F.interpolate(irs, size=ns, mode='bilinear', align_corners=False) #zjq
-            #breakpoint()
+
             # Forward
             with amp.autocast(enabled=cuda):
                 # t0 = time.time()
@@ -434,7 +414,7 @@ def train(hyp, opt, device, tb_writer=None):
                     pred,_ = model(imgs,irs,opt.input_mode)
                 # t1 = time.time()
                 # print(t1-t0)
-                #breakpoint()
+
                 loss, lbox , lobj , lcls  = compute_loss(pred, targets.to(device))  # loss scaled by batch_size
                 loss_items = torch.cat((lbox, lobj, lcls, loss)).detach()
                 if opt.super: #and not opt.attention and not opt.super_attention:    
@@ -624,7 +604,7 @@ if __name__ == '__main__':
     parser.add_argument('--super', default=False, action='store_true', help='super resolution')
     parser.add_argument('--data', type=str,default='codes/models/SRvedai.yaml', help='data.yaml path')
     parser.add_argument('--hyp', type=str, default='codes/models/hyp.scratchs.yaml', help='hyperparameters path')
-    parser.add_argument('--epochs', type=int, default=300)          #*changed default 300
+    parser.add_argument('--epochs', type=int, default=300)
     parser.add_argument('--ch_steam', type=int, default=3)
     parser.add_argument('--ch', type=int,default=128, help = '3 4 16 midfusion1:64 midfusion2,3:128 midfusion4:256')  #*changed from default to match SAM
     parser.add_argument('--input_mode', type=str,default='RGB+IR',help ='RGB IR RGB+IR(pixel-level fusion) RGB+IR+fusion(feature-level fusion)')
@@ -658,11 +638,9 @@ if __name__ == '__main__':
     parser.add_argument('--bbox_interval', type=int, default=-1, help='Set bounding-box image logging interval for W&B')
     parser.add_argument('--save_period', type=int, default=-1, help='Log model after every "save_period" epoch')
     parser.add_argument('--artifact_alias', type=str, default="latest", help='version of dataset artifact to be used')
-    #*opt, _ = parser.parse_args()
+
     opt, _= parser.parse_known_args()
-    ######swin####
-    #args, unparsed = parser.parse_known_args() 
-    #config = get_config(args)
+
 
     # Set DDP variables
     opt.world_size = 2 #* changed int(os.environ['WORLD_SIZE']) if 'WORLD_SIZE' in os.environ else 1

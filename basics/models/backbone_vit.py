@@ -108,31 +108,6 @@ class ImageEncoderViT(nn.Module):
                 
         #     )
         
-        #TODO  down c4 and c2 blocks
-        ''' c4 and c2 blocks further channel fusion
-
-        self.pos_embedc4 = nn.Parameter(
-            torch.zeros(1, img_size // 4, img_size // 4, 48)
-        )
-
-        self.c4_blocks  = nn.ModuleList()
-        c4_depth = 3   #depth of c4 blocks
-        for i in range(c4_depth):
-            block = CAttentionBlock(
-                embedding_dim = 48,
-                num_heads = num_heads,
-            )
-            self.c4_blocks.append(block)
-
-        self.c2_blocks = nn.ModuleList()
-        c2_depth = 3
-        for i in range (c2_depth):
-            block = C2AttentionBlock(
-                embedding_dim= 96,
-                num_heads= num_heads
-            )
-        '''
-        
         
 
         #swin blocks
@@ -186,72 +161,8 @@ class ImageEncoderViT(nn.Module):
             self.stage3.append(block)
 
 
-        '''
-        previous blocks
-        top_padding = [False, True]
-        self.stage1 = nn.ModuleList()
-        for i in range(2):
-            block = Block(
-                dim=embed_dim,
-                num_heads=num_heads,
-                mlp_ratio=mlp_ratio,
-                qkv_bias=qkv_bias,
-                norm_layer=norm_layer,
-                act_layer=act_layer,
-                use_rel_pos=use_rel_pos,
-                rel_pos_zero_init=rel_pos_zero_init,
-                window_size=3,#window_size[i] if i not in global_attn_indexes else 0,
-                top_padding = False,#top_padding[i],
-                input_size=(img_size // 4, img_size // 4),
 
-            )
-            self.stage1.append(block)
-        self.pmerging1 = PatchMerging((128, 128), embed_dim)
-        #stage2
 
-        self.stage2 = nn.ModuleList()
-        for i in range(2):
-            block = Block(
-                dim=384,
-                num_heads=num_heads,
-                mlp_ratio=mlp_ratio,
-                qkv_bias=qkv_bias,
-                norm_layer=norm_layer,
-                act_layer=act_layer,
-                use_rel_pos=use_rel_pos,
-                rel_pos_zero_init=rel_pos_zero_init,
-                window_size=3,#window_size[i] if i not in global_attn_indexes else 0,
-                top_padding = False,#top_padding[i],
-                input_size=(img_size // 8, img_size // 8),
-
-            )
-            self.stage2.append(block)
-        self.pmerging2 = PatchMerging((64, 64), 384)
-        #stage3
-        self.stage3 = nn.ModuleList()
-        for i in range(2):
-            block = Block(
-                dim=768,
-                num_heads=num_heads,
-                mlp_ratio=mlp_ratio,
-                qkv_bias=qkv_bias,
-                norm_layer=norm_layer,
-                act_layer=act_layer,
-                use_rel_pos=use_rel_pos,
-                rel_pos_zero_init=rel_pos_zero_init,
-                window_size=3,#window_size[i] if i not in global_attn_indexes else 0,
-                top_padding = False,#top_padding[i],
-                input_size=(img_size // 16, img_size // 16),
-
-            )
-            self.stage3.append(block)
-        #TODO following layer is huge and not used
-        ##self.fc_layer = MLPBlock(embedding_dim=192, mlp_dim=384, act=nn.GELU)
-        #nn.Linear(192, 192) #removed (img_size //16) *
-        
-        '''
-    
-        #a second pathc embedding
       
         self.neck3 = nn.Conv2d(
                     768,
@@ -275,63 +186,17 @@ class ImageEncoderViT(nn.Module):
             bias=False,
         )
 
-        """
-        self.neck1 = nn.Sequential(
-            nn.Conv2d(
-                embed_dim,
-                384,
-                kernel_size=1,
-                bias=False,
-            ),
-            LayerNorm2d(384),
-            nn.Conv2d(
-                384,
-                384,
-                kernel_size=3,
-                padding=1,
-                bias=False,
-            ),
-            LayerNorm2d(384),
-        )
-        """
-    '''
-    def fuse_chan(self, x: torch.Tensor):
-        if x.shape[2] != 512:
-            pad_height = max(512 - x.shape[2], 0)
-            pad_width = max(512 - x.shape[3], 0)
-
-            # Pad the image with zeros
-            x = F.pad(x, (0, pad_width, 0, pad_height), mode='constant', value=0)
-        bs, h, w, c = x.shape
-        r = self.channel_embed(x[:,0,:,:].unsqueeze(1)).view(bs, 1, 1, 1536)
-        g = self.channel_embed(x[:,1,:,:].unsqueeze(1)).view(bs, 1, 1, 1536)
-        b = self.channel_embed(x[:,2,:,:].unsqueeze(1)).view(bs, 1, 1, 1536)
-        i = self.channel_embed(x[:,3,:,:].unsqueeze(1)).view(bs, 1, 1, 1536)
-
-        chans = torch.cat((r, g, b, i), dim=1)
-
-        chans = self.chan_block(chans)
-        bs, h, w, c     = chans.shape
-
-        blocks = self.img_size // 16
-
-        bs = chans.shape[0]
-        chans_flat = chans.view(bs, -1)
-        chans_out = self.fc_layer(chans_flat)
-        chans_out = chans_out.view(bs, 1, 192)
-        chans_out = chans_out.repeat(1, blocks, 1)
-        self.chan_atten = chans_out
-    '''
+        
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         #fuse channels:
         
         ##patches = self.patch_embed(x)
         
         r, g ,b, i = get_channels(x)
-        r = self.channel_embed_r(r)#.unsqueeze(1)      #x1[:,0,:,:].unsqueeze(1)).view(bs, 1, 1, 1536)
-        g = self.channel_embed_g(g)#.unsqueeze(1)      #x1[:,1,:,:].unsqueeze(1)).view(bs, 1, 1, 1536)
-        b = self.channel_embed_b(b)#.unsqueeze(1)      #x1[:,2,:,:].unsqueeze(1)).view(bs, 1, 1, 1536)
-        i = self.channel_embed_i(i)#.unsqueeze(1)       #x1[:,3,:,:].unsqueeze(1)).view(bs, 1, 1, 1536)
+        r = self.channel_embed_r(r)
+        g = self.channel_embed_g(g)
+        b = self.channel_embed_b(b)
+        i = self.channel_embed_i(i)
 
         # if self.pos_embed is not None:
         #     if r.shape[1] == self.pos_embed.shape[1]: #patches before
@@ -351,33 +216,7 @@ class ImageEncoderViT(nn.Module):
             if x.shape[1] == self.pos_embed.shape[1]: #patches before
                 x = x + self.pos_embed
 
-        """following c4 and c2 blocks
-        #adding position embeddings to each channel separately
-        if self.pos_embedc4 is not None:
-            if r.shape[1] == self.pos_embedc4.shape[1]: #patches before
-                r = r + self.pos_embedc4
-                g = g + self.pos_embedc4
-                b = b + self.pos_embedc4
-                i = i + self.pos_embedc4
 
-        #C4 blocks preferabily with window size of 3
-        for j in range(len(self.c4_blocks)):
-            r, g, b, i = self.c4_blocks[j](r, g, b, i)
-        
-        c1 = torch.cat((r,g), dim=-1)
-        c2 = torch.cat((b,i), dim = -1)
-        
-        #TODO add 1 or 2 fully connected for c1 and c2 to pass through for mixing up the r-g and b-i  optional
-
-        #C2 attention blocks with window size of 7
-        for i in range(len(self.c2_blocks)):
-            c1, c2 = self.c2_blocks[i](r, g, b, i, 7)   #7 is the size of window used for window attention
-        x = torch.cat((c1, c2), dim = -1)
-        
-        #TODO potential for 1 fullcy connected layer to mix up c1 and c2
-
-        #breakpoint()
-        """
         # x = self.chan_block(r, g, b, i)
         # x = x.permute(0, 3, 1, 2)
         # x = self.patch_embed(x)
@@ -501,17 +340,7 @@ class Block(nn.Module):
             
         x = shortcut + x
 
-        #nshortcut = x
-        # x= self.lin1(self.norm2(x))
-        # x = x.permute(0, 3, 1, 2)
-        # x = F.pad(x, (0, 1, 0, 1))
-        # x = self.conv1(x)
-        # x = F.pad(x, (0, 1, 0, 1))
-        # x = self.gelu(x)
-        # x = self.conv2(x)
-        # x = x.permute(0, 2, 3, 1)
-        # x = self.lin2(x)
-        # x = x + nshortcut
+
         x = x + self.mlp(self.norm2(x))
         return x
 
@@ -576,6 +405,7 @@ class Attention(nn.Module):
 
 
 class CAttentionBlock(nn.Module):
+    """Multi-modal transformer block for RGB+ channel attention"""
     def __init__(
         self,
         embedding_dim: int,
@@ -585,9 +415,7 @@ class CAttentionBlock(nn.Module):
         skip_pe: bool = True,
         shift_size =0,
         ) -> None:
-        '''
-        transformer block for calculating intra channel attention for 4 channels
-        '''
+
 
         super().__init__()
 
@@ -735,74 +563,8 @@ class CAttentionBlock(nn.Module):
 
 
 
-class C2AttentionBlock(nn.Module):
-    def __init__(
-        self,
-        embedding_dim: int,
-        num_heads: int,
-        out_dim: int = 192,
-        activation: Type[nn.Module] = nn.ReLU,
-        skip_pe: bool = True,
-        ) -> None:
-        '''
-        transformer block for calculating intra channel attention for 2 channels
-        '''
-
-        super().__init__()
-
-
-        self.c12c2_attn = CAttention(embedding_dim, num_heads)
-        self.norm1 = nn.LayerNorm(embedding_dim)
-
-        self.c22c1_attn = CAttention(embedding_dim, num_heads)
-        self.norm2 = nn.LayerNorm(embedding_dim)
-
-
-        # self.rgb2ir_attn = CAttention(embedding_dim, num_heads)
-        # self.norm3 = nn.LayerNorm(embedding_dim)
-
-        # self.ir2rgb_attn = CAttention(embedding_dim, num_heads)
-        # self.norm4 = nn.LayerNorm(embedding_dim)
-        
-       
-
-    def forward(self, c1: torch.Tensor, c2: torch.Tensor, window_size:int):
-        b1, h, w, c = r.shape
-        r, r_hw =window_partition(c1, window_size)
-        g, g_hw = window_partition(c2, window_size)
-        
-        b2, h2, w2, c2 = r.shape
-        r = r.reshape(b2, h2 * w2, c2)
-        g = g.reshape(b2, h2 * w2, c2)
-
-
-        attn_out = self.r2g_attn(q = r, k =g, v =g)
-        x1 = r + attn_out
-        x1 = self.norm1(x1)
-
-        attn_out = self.rg2b_attn(q = g, k =r, v =r)
-        x2 = g + attn_out
-        x2 = self.norm2(x2)
-
-
-        x1 = x1.view(b2, h2, w2, c2)
-        x2 = x2.view(b2, h2, w2, c2)
-
-        x1 = window_unpartition(x1, window_size, r_hw, (h, w))
-        x2 = window_unpartition(x2, window_size, g_hw, (h, w))
-
-        x = torch.cat((x1, x2), dim=-1)
-        # x = self.fc_layer(x)
-        # #x = self.dropout(x)
-        # x = self.mlp(x)
-        # x = self.norm5(x)
-        return x1, x2
-
-
-
-
 class CAttention(nn.Module):
-    """attention layer allowing cross attention used for channels"""
+    """attention layer without FFN allowing cross attention used for channels"""
 
     def __init__(self, 
                 embedding_dim:int,
@@ -850,7 +612,7 @@ class CAttention(nn.Module):
         out = attn @ v
         out = self._recombine_heads(out)
 
-        #out = out + self.mlp(out, dimensions[0], dimensions[1])  #128 is hard coded height and width
+
         return out
 
 
