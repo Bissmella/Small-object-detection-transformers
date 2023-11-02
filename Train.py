@@ -600,9 +600,9 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     #############################
     parser.add_argument('--weights', type=str, default='', help='initial weights path')
-    parser.add_argument('--cfg', type=str,default='codes/models/SRyolo_SAM_v3_orig_multiL_glob_CF.yaml', help='model.yaml path') #yolov5s
+    parser.add_argument('--cfg', type=str,default='codes/models/model.yaml', help='model.yaml path') #yolov5s
     parser.add_argument('--super', default=False, action='store_true', help='super resolution')
-    parser.add_argument('--data', type=str,default='codes/models/SRvedai.yaml', help='data.yaml path')
+    parser.add_argument('--data', type=str,default='codes/models/data_vedai.yaml', help='data.yaml path')
     parser.add_argument('--hyp', type=str, default='codes/models/hyp.scratchs.yaml', help='hyperparameters path')
     parser.add_argument('--epochs', type=int, default=300)
     parser.add_argument('--ch_steam', type=int, default=3)
