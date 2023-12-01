@@ -10,13 +10,13 @@ import yaml
 from tqdm import tqdm
 from pathlib import Path
 
-from .codes.basics.models.experimental import attempt_load
-from .codes.basics.utils.datasets import create_dataloader, create_dataloader_sr
-from .codes.basics.utils.general import coco80_to_coco91_class, check_dataset, check_file, check_img_size, check_requirements, \
+from basics.models.experimental import attempt_load
+from basics.utils.datasets import create_dataloader, create_dataloader_sr
+from basics.utils.general import coco80_to_coco91_class, check_dataset, check_file, check_img_size, check_requirements, \
     box_iou, non_max_suppression,weighted_boxes, scale_coords, xyxy2xywh, xywh2xyxy, set_logging, increment_path, colorstr
-from .codes.basics.utils.metrics import ap_per_class, ConfusionMatrix
-from .codes.basics.utils.plots import plot_images, output_to_target, plot_study_txt
-from .codes.basics.utils.torch_utils import select_device, time_synchronized
+from basics.utils.metrics import ap_per_class, ConfusionMatrix
+from basics.utils.plots import plot_images, output_to_target, plot_study_txt
+from basics.utils.torch_utils import select_device, time_synchronized
 import torch.nn.functional as F
 from torchvision import transforms
 from PIL import Image
