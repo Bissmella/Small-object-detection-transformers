@@ -47,7 +47,8 @@ def test(data,
          plots=True,
          wandb_logger=None,
          compute_loss=None,
-         is_coco=False):
+         is_coco=False,
+         sr = False):
     # Initialize/load model and set device
     training = model is not None
     if training:  # called by train.py
@@ -143,6 +144,10 @@ def test(data,
 
             # Compute loss
             if compute_loss:
+            # breakpoint()
+            # if sr:
+            #     loss += 1*(torch.nn.L1Loss()(output_sr[:,0:3,:,:,],img)+torch.nn.L1Loss()(output_sr[:,3:,:,:,],ir[:,0:1,:,:,]))
+            # else:
                 loss += compute_loss([x.float() for x in train_out], targets)[1][:3]  # box, obj, cls
 
             # Run NMS

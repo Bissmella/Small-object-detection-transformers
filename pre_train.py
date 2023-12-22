@@ -106,15 +106,6 @@ def train(hyp, opt, device, tb_writer=None):
         model = Model(opt.cfg, input_mode = opt.input_mode ,ch_steam=opt.ch_steam,ch=opt.ch, nc=nc, anchors=hyp.get('anchors'),config=None,sr=opt.super,factor=down_factor).to(device)  # create
        
     
-    ## TODO load pre-trained weights
-    pth_file_path = '/home/bibahaduri/sryolo/outputs_SAM/pre_training/run/train/exp13/weights/last.pt'  # Provide the correct path
-
-    # Load the state dictionary from the .pth file
-    state_dict = torch.load(pth_file_path, map_location=torch.device('cpu'))
-    image_encoder_state_dict = {k.replace('image_encoder.', ''): v for k, v in state_dict['model'].named_parameters() if k.startswith('image_encoder.')}
-
-    #TODO: uncomment below for loading the pre-trained weights
-    #model.image_encoder.load_state_dict(image_encoder_state_dict, strict = False)
 
     
 
@@ -129,10 +120,6 @@ def train(hyp, opt, device, tb_writer=None):
         if any(x in k for x in freeze):
             print('freezing %s' % k)
             v.requires_grad = False
-        # if k.startswith("image_encoder."):
-        #     v.requires_grad = False
-        # if "relative_position_index"  in k or "attn_mask" in k or "pmerging1" in k or "stage2" in k:
-        #     v.requires_grad = True
 
     # Optimizer
     nbs = 64  # nominal batch size
@@ -210,7 +197,7 @@ def train(hyp, opt, device, tb_writer=None):
     # start_epoch = 98 #zjq
     # Image sizes
     gs = max(int(model.stride.max()), 32)  # grid size (max stride)
-    nl = model.detect[-1].nl  # number of detection layers (used for scaling hyp['obj'])   #* changed model.model[-1]   to model.detect
+    ###nl = model.detect[-1].nl  # number of detection layers (used for scaling hyp['obj'])   #* changed model.model[-1]   to model.detect
     imgsz, imgsz_test = [check_img_size(x, gs) for x in opt.img_size]  # verify imgsz are gs-multiples
 
     # DP mode
@@ -267,12 +254,12 @@ def train(hyp, opt, device, tb_writer=None):
             # model._initialize_biases(cf.to(device))
             if plots:
                 plot_labels(labels, names, save_dir, loggers)
-                # if tb_writer:
-                #     tb_writer.add_histogram('classes', c, 0)
+                ###if tb_writer:
+                    ###tb_writer.add_histogram('classes', c, 0)
 
-            # Anchors
-            if not opt.noautoanchor:
-                check_anchors(dataset, model=model, thr=hyp['anchor_t'], imgsz=imgsz)
+            ### Anchors
+            # if not opt.noautoanchor:
+            #     check_anchors(dataset, model=model, thr=hyp['anchor_t'], imgsz=imgsz)
             model.half().float()  # pre-reduce anchor precision
 
     # DDP mode
@@ -280,9 +267,9 @@ def train(hyp, opt, device, tb_writer=None):
         model = DDP(model, device_ids=[opt.local_rank], output_device=opt.local_rank, find_unused_parameters=True)
 
     # Model parameters
-    hyp['box'] *= 3. / nl  # scale to layers
-    hyp['cls'] *= nc / 80. * 3. / nl  # scale to classes and layers
-    hyp['obj'] *= (imgsz / 640) ** 2 * 3. / nl  # scale to image size and layers
+    ### hyp['box'] *= 3. / nl  # scale to layers
+    ### hyp['cls'] *= nc / 80. * 3. / nl  # scale to classes and layers
+    ### hyp['obj'] *= (imgsz / 640) ** 2 * 3. / nl  # scale to image size and layers
     model.nc = nc  # attach number of classes to model
     model.hyp = hyp  # attach hyperparameters to model
     model.gr = 1.0  # iou loss ratio (obj_loss = 1.0 or iou)
@@ -297,7 +284,7 @@ def train(hyp, opt, device, tb_writer=None):
     results = (0, 0, 0, 0, 0, 0, 0)  # P, R, mAP@.5, mAP@.5-.95, val_loss(box, obj, cls)
     scheduler.last_epoch = start_epoch - 1  # do not move
     scaler = amp.GradScaler(enabled=cuda)
-    compute_loss = ComputeLoss(model)  # init loss class
+    compute_loss = None###ComputeLoss(model)  # init loss class
     # attention_loss = LevelAttention_loss()
     # superloss = Superresolution_loss()
 
@@ -337,9 +324,6 @@ def train(hyp, opt, device, tb_writer=None):
         # model.module.conv4.t = t
         # model.module.conv5.t = t
         model.train()
-        # if epoch == 40:
-        #     for k, v in model.named_parameters():
-        #         v.requires_grad = True
 
         '''
         #*changed freezing parameters for SAM backbone
@@ -367,11 +351,11 @@ def train(hyp, opt, device, tb_writer=None):
         # b = int(random.uniform(0.25 * imgsz, 0.75 * imgsz + gs) // gs * gs)
         # dataset.mosaic_border = [b - imgsz, -b]  # height, width borders
 
-        mloss = torch.zeros(4, device=device)  # mean losses
+        mloss = torch.zeros(1, device=device)  # mean losses
         if rank != -1:
             dataloader.sampler.set_epoch(epoch)
         pbar = enumerate(dataloader)
-        logger.info(('\n' + '%10s' * 8) % ('Epoch', 'gpu_mem', 'box', 'obj', 'cls', 'total', 'labels', 'img_size'))
+        logger.info(('\n' + '%10s' * 5) % ('Epoch', 'gpu_mem', 'total', 'labels', 'img_size'))
         if rank in [-1, 0]:
             pbar = tqdm(pbar, total=nb)  # progress bar
         optimizer.zero_grad()
@@ -432,8 +416,8 @@ def train(hyp, opt, device, tb_writer=None):
                 # t1 = time.time()
                 # print(t1-t0)
 
-                loss, lbox , lobj , lcls  = compute_loss(pred, targets.to(device))  # loss scaled by batch_size
-                loss_items = torch.cat((lbox, lobj, lcls, loss)).detach()
+                ###loss, lbox , lobj , lcls  = compute_loss(pred, targets.to(device))  # loss scaled by batch_size
+                ###loss_items = torch.cat((lbox, lobj, lcls, loss)).detach()
                 if opt.super: #and not opt.attention and not opt.super_attention:    
                     if opt.input_mode =='IR':
                         sr_loss = 0.5*torch.nn.L1Loss()(output_sr,ir_image)
@@ -441,7 +425,8 @@ def train(hyp, opt, device, tb_writer=None):
                         sr_loss = 0.5*torch.nn.L1Loss()(output_sr,image)
                     else:
                         sr_loss = 0.1*(torch.nn.L1Loss()(output_sr[:,0:3,:,:,],image)+torch.nn.L1Loss()(output_sr[:,3:,:,:,],ir_image[:,0:1,:,:,]))
-                    loss += sr_loss
+                    loss = sr_loss
+                loss_items = loss.detach()
                 # if (opt.super or opt.super_attention) and opt.attention:        
                 #     if opt.input_mode =='IR':
                 #         sr_loss = 0.01*torch.nn.MSELoss()(output_sr,ir_image)
@@ -473,9 +458,11 @@ def train(hyp, opt, device, tb_writer=None):
             if rank in [-1, 0]:
                 mloss = (mloss * i + loss_items) / (i + 1)  # update mean losses
                 mem = '%.3gG' % (torch.cuda.memory_reserved() / 1E9 if torch.cuda.is_available() else 0)  # (GB)
-                s = ('%10s' * 2 + '%10.4g' * 6) % (
+                s = ('%10s' * 2 + '%10.4g' * 3) % (
                     '%g/%g' % (epoch, epochs - 1), mem, *mloss, targets.shape[0], imgs.shape[-1])
                 pbar.set_description(s)
+
+
 
                 # Plot
                 if plots and ni < 3:
@@ -618,19 +605,19 @@ if __name__ == '__main__':
     #############################
     parser.add_argument('--weights', type=str, default='', help='initial weights path')
     parser.add_argument('--cfg', type=str,default='codes/models/model.yaml', help='model.yaml path') #yolov5s
-    parser.add_argument('--super', default=False, action='store_true', help='super resolution')
+    parser.add_argument('--super', default=True, action='store_true', help='super resolution')
     parser.add_argument('--data', type=str,default='codes/models/data_vedai.yaml', help='data.yaml path')
     parser.add_argument('--hyp', type=str, default='codes/models/hyp.scratchs.yaml', help='hyperparameters path')
-    parser.add_argument('--epochs', type=int, default=300)
+    parser.add_argument('--epochs', type=int, default=200)
     parser.add_argument('--ch_steam', type=int, default=3)
     parser.add_argument('--ch', type=int,default=128, help = '3 4 16 midfusion1:64 midfusion2,3:128 midfusion4:256')  #*changed from default to match SAM
     parser.add_argument('--input_mode', type=str,default='RGB+IR',help ='RGB IR RGB+IR(pixel-level fusion) RGB+IR+fusion(feature-level fusion)')
-    parser.add_argument('--batch-size', type=int, default=12, help='total batch size for all GPUs')    #* default 2
+    parser.add_argument('--batch-size', type=int, default=4, help='total batch size for all GPUs')    #* default 2
     parser.add_argument('--train_img_size', type=int,default=1024, help='train image sizes,if use SR,please set 1024')
     parser.add_argument('--test_img_size', type=int, default=512, help='test image sizes')
     parser.add_argument('--hr_input', default=True,action='store_true', help='high resolution input(1024*1024)') #if use SR,please set True
     parser.add_argument('--rect', action='store_true', help='rectangular training')
-    parser.add_argument('--resume', nargs='?', const=True, default=False, help='resume most recent training')
+    parser.add_argument('--resume', nargs='?', const=True, default=True, help='resume most recent training')
     parser.add_argument('--nosave', action='store_true', help='only save final checkpoint')
     parser.add_argument('--notest', action='store_true', help='only test final epoch')
     parser.add_argument('--noautoanchor', action='store_true', help='disable autoanchor check')
@@ -645,7 +632,7 @@ if __name__ == '__main__':
     parser.add_argument('--sync-bn', action='store_true', help='use SyncBatchNorm, only available in DDP mode')
     parser.add_argument('--local_rank', type=int, default=-1, help='DDP parameter, do not modify')
     parser.add_argument('--workers', type=int, default=4, help='maximum number of dataloader workers')
-    parser.add_argument('--project', default='outputs_SAM/pre_trained_train/run/train', help='save to project/name')
+    parser.add_argument('--project', default='outputs_SAM/pre_training/run/train', help='save to project/name')
     parser.add_argument('--entity', default=None, help='W&B entity')
     parser.add_argument('--name', default='exp', help='save to project/name')
     parser.add_argument('--exist-ok', action='store_true', help='existing project/name ok, do not increment')
@@ -669,8 +656,9 @@ if __name__ == '__main__':
     opt.img_size = [opt.train_img_size,opt.test_img_size]
     # Resume
     wandb_run = check_wandb_resume(opt)
+
     if opt.resume and not wandb_run:  # resume an interrupted run
-        ckpt = opt.resume if isinstance(opt.resume, str) else get_latest_run()  # specified or most recent path      '/home/bbahaduri/sryolo/outputs_SAM/yoloSAM_v2_p6_multiL_RGBIR_glob_CF_v2_final2/run/train/exp9/'
+        ckpt = opt.resume if isinstance(opt.resume, str) else get_latest_run('/home/bibahaduri/sryolo/outputs_SAM/pre_training/run/train/exp13/weights')  # specified or most recent path
         assert os.path.isfile(ckpt), 'ERROR: --resume checkpoint does not exist'
         apriori = opt.global_rank, opt.local_rank
         with open(Path(ckpt).parent.parent / 'opt.yaml') as f:

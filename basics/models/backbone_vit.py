@@ -113,7 +113,7 @@ class ImageEncoderViT(nn.Module):
         #swin blocks
         shift_size = [0, 2, 0, 2, 0, 2, 0, 2]
         self.stage1 = nn.ModuleList()
-        for i in range(6):
+        for i in range(2):
             block = SwinTransformerBlock(
                 dim=embed_dim,
                 input_resolution=(128,128),
@@ -147,7 +147,7 @@ class ImageEncoderViT(nn.Module):
         self.pmerging2 = PatchMerging((64, 64), 384)
 
         self.stage3 = nn.ModuleList()
-        for i in range(1):
+        for i in range(2):
             block = SwinTransformerBlock(
                 dim=768,
                 input_resolution=(32,32),
@@ -231,7 +231,7 @@ class ImageEncoderViT(nn.Module):
         z= []
         for i in range(len(self.stage1)):
             x = self.stage1[i](x)
-            if i in (4, 5):
+            if i in (0, 1):
                 x = x.view(bs, h, w, c)
                 z.append(x)
                 x = x.view(bs, h * w, c)

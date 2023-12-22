@@ -105,10 +105,10 @@ class Model(nn.Module):
             self.steam, _ = parse_model(deepcopy(self.yaml),'steam', ch=[ch_steam],config=config)  # zjq model, savelist
         #self.model, self.save = parse_model(deepcopy(self.yaml),'backbone+head', ch=[ch],config=config)  # model, savelist   #* changed removed
         self.image_encoder, self.save1 = parse_model(deepcopy(self.yaml),'backbone', ch=[ch],config=config)   #*changed added to match SAM
-        self.detect, self.save2 = parse_model(deepcopy(self.yaml),'head', ch=[ch],config=config)                #*changed added to match SAM
+                      #*changed added to match SAM
         if self.sr == True:
             # from models.deeplab import DeepLab
-            from models.deeplabedsr import DeepLab
+            from .deeplabedsr import DeepLab
             if input_mode == 'IR' or input_mode == 'RGB':
                 self.model_up = DeepLab(3,self.yaml['c1'],self.yaml['c2'],factor=factor)#.cuda() #'if the size is m:192,768 l:256,1024 x:320 1280
             else:
@@ -122,17 +122,19 @@ class Model(nn.Module):
 
 
         # Build strides, anchors
-        m = self.detect[-1]  # Detect()   #*changed self.model[-1] to self.detect
-        if isinstance(m, Detect):
-            s = 256  # 2x min stride
-            #m.stride = torch.tensor([s / x.shape[-2] for x in self.forward(torch.zeros(1, ch_steam, s, s),torch.zeros(1, ch_steam, s, s),input_mode)[0]])  # forward
-            
-            m.stride = torch.tensor([ 4.])#([s / x.shape[-2] for x in self.forward(torch.zeros(1, ch_steam, s, s),torch.zeros(1, ch_steam, s, s),input_mode)[0]])  # forward
-            m.anchors /= m.stride.view(-1, 1, 1)
-            check_anchor_order(m)
-            self.stride = m.stride
-            self._initialize_biases()  # only run once
-
+        else:
+            self.detect, self.save2 = parse_model(deepcopy(self.yaml),'head', ch=[ch],config=config)  
+            m = self.detect[-1]  # Detect()   #*changed self.model[-1] to self.detect
+            if isinstance(m, Detect):
+                s = 256  # 2x min stride
+                #m.stride = torch.tensor([s / x.shape[-2] for x in self.forward(torch.zeros(1, ch_steam, s, s),torch.zeros(1, ch_steam, s, s),input_mode)[0]])  # forward
+                
+                m.stride = torch.tensor([ 4.])#([s / x.shape[-2] for x in self.forward(torch.zeros(1, ch_steam, s, s),torch.zeros(1, ch_steam, s, s),input_mode)[0]])  # forward
+                m.anchors /= m.stride.view(-1, 1, 1)
+                check_anchor_order(m)
+                self.stride = m.stride
+                self._initialize_biases()  # only run once
+        self.stride = torch.tensor([ 4.])
         # m = self.model[-2]  # Detect()
         # if isinstance(m, Detect):
         #     s = 256  # 2x min stride
@@ -207,8 +209,12 @@ class Model(nn.Module):
                     y,features = self.forward_once(steam,'yolo', profile) #zjq
                     return y,features
             else:
-                y,features = self.forward_once(steam,'yolo', profile) #zjq
-                return y[0],y[1],features
+                if self.sr:
+                    y, features, sr = self.forward_once(steam,'yolo', profile)
+                    return y[0],y[1],features, sr
+                else:
+                    y,features = self.forward_once(steam,'yolo', profile) #zjq
+                    return y[0],y[1],features
 
 
 
@@ -264,21 +270,21 @@ class Model(nn.Module):
                      dt.append((time_synchronized() - t) * 100)
                      print('%10.1f%10.0f%10.1fms %-40s' % (o, m.np, dt[-1], m.type))
             '''
+            if self.sr == False:
+                for m in self.detect:
+                    if m.f != -1:  # if not from previous layer
+                        x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]  # from earlier layers
+                    if profile:
+                        o = thop.profile(m, inputs=(x,), verbose=False)[0] / 1E9 * 2 if thop else 0  # FLOPS
+                        t = time_synchronized()
+                        for _ in range(10):
+                            _ = m(x)
+                        dt.append((time_synchronized() - t) * 100)
+                        print('%10.1f%10.0f%10.1fms %-40s' % (o, m.np, dt[-1], m.type))
 
-            for m in self.detect:
-                if m.f != -1:  # if not from previous layer
-                    x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]  # from earlier layers
-                if profile:
-                    o = thop.profile(m, inputs=(x,), verbose=False)[0] / 1E9 * 2 if thop else 0  # FLOPS
-                    t = time_synchronized()
-                    for _ in range(10):
-                        _ = m(x)
-                    dt.append((time_synchronized() - t) * 100)
-                    print('%10.1f%10.0f%10.1fms %-40s' % (o, m.np, dt[-1], m.type))
+                    x = m(x)  # run
 
-                x = m(x)  # run
-
-                y.append(x)
+                    y.append(x)
                 
 
             # for feature in y[:-1]:
@@ -293,7 +299,11 @@ class Model(nn.Module):
                 else:
                     return x,y#(y[self.f1],y[self.f2],y[self.f3])#(y[4],y[8],y[18],y[21],y[24])#(y[7],y[15],y[-2])
             else:
-                return x,y#(y[17],y[20],y[23])#(y[4],y[8],y[18],y[21],y[24])#(y[7],y[15],y[-2])(y[-4],y[-3],y[-2])
+                if self.sr:
+                    output_sr = self.model_up(y[self.l1],y[self.l2])
+                    return x, y, output_sr
+                else:
+                    return x,y#(y[17],y[20],y[23])#(y[4],y[8],y[18],y[21],y[24])#(y[7],y[15],y[-2])(y[-4],y[-3],y[-2])
 
 
     def _initialize_biases(self, cf=None):  # initialize biases into Detect(), cf is class frequency
