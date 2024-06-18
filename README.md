@@ -1,11 +1,4 @@
-# Multi-modal object detection in aerial images using transformers
-
-
-Dataset: VEDAI dataset https://pan.baidu.com/s/1L0SWi5AQA6ZK9jDIWRY7Fg
-
-Make sure to run dat_transform.py (https://github.com/Bissmella/SuperYolo/blob/main/data_transform.py) on the dataset before training. Change the PATH to your dataset directory path.
-
-# FCT
+# Multimodal transformer using cross-channel attention for object detection in remote sensing images
 This repo contains the official PyTorch implementation for the ICIP 2024 paper: 'Multimodal transformer using cross-channel attention for object detection in remote sensing images'  ([paper](https://arxiv.org/pdf/2310.13876)).
 
 <div align="center"><img src="assets/figure_1.png" width="500"></div>
