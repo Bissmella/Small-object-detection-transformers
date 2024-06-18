@@ -653,7 +653,7 @@ if __name__ == '__main__':
     # Resume
     wandb_run = check_wandb_resume(opt)
     if opt.resume and not wandb_run:  # resume an interrupted run
-        ckpt = opt.resume if isinstance(opt.resume, str) else get_latest_run('/home/bbahaduri/sryolo/outputs_SAM/yoloSAM_v2_p6_multiL_RGBIR_glob_CF_v2_final2/run/train/exp9/')  # specified or most recent path
+        ckpt = opt.resume if isinstance(opt.resume, str) else get_latest_run()  # specified or most recent path
         assert os.path.isfile(ckpt), 'ERROR: --resume checkpoint does not exist'
         apriori = opt.global_rank, opt.local_rank
         with open(Path(ckpt).parent.parent / 'opt.yaml') as f:
