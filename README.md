@@ -8,7 +8,7 @@ Make sure to run dat_transform.py (https://github.com/Bissmella/SuperYolo/blob/m
 # FCT
 This repo contains the official PyTorch implementation for the ICIP 2024 paper: 'Multimodal transformer using cross-channel attention for object detection in remote sensing images'  ([paper](https://arxiv.org/pdf/2310.13876)).
 
-<div align="center"><img src="assets/figure_1.pdf" width="500"></div>
+<div align="center"><img src="assets/figure_1.png" width="500"></div>
 
 ## Brief Introduction
 
@@ -25,14 +25,14 @@ This repo contains the official PyTorch implementation for the ICIP 2024 paper: 
 
 ## Citation
 If you find the idea useful or inspiring, please consider citing:
-'''
+```
 @article{bahaduri2023multimodal,
   title={Multimodal Transformer Using Cross-Channel attention for Object Detection in Remote Sensing Images},
   author={Bahaduri, Bissmella and Ming, Zuheng and Feng, Fangchen and Mokraou, Anissa},
   journal={arXiv preprint arXiv:2310.13876},
   year={2023}
 }
-'''
+```
 
 
 ## Acknowledgement
